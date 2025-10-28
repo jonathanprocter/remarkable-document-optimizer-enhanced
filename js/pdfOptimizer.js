@@ -100,10 +100,10 @@ const PDFOptimizer = {
         return {
             width: width,
             height: height,
-            marginX: width * 0.1,
-            marginY: height * 0.1,
-            contentWidth: width * 0.8,
-            contentHeight: height * 0.8
+            marginX: 10,
+            marginY: 10,
+            contentWidth: width - 20,
+            contentHeight: height - 20
         };
     },
 
@@ -535,6 +535,15 @@ const PDFOptimizer = {
         const lines = [];
         let currentPart = '';
 
+        // Only break if word is ACTUALLY too long (not just missing spaces)
+        // Check if the word is genuinely a single long word or concatenated words
+        const wordWidth = pdf.getTextWidth(word);
+        if (wordWidth <= maxWidth) {
+            // Word fits, don't break it
+            return [word];
+        }
+
+        // Word is genuinely too long, break it intelligently
         for (const char of word) {
             const testPart = currentPart + char;
             if (pdf.getTextWidth(testPart) <= maxWidth) {
