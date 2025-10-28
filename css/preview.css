@@ -1,0 +1,203 @@
+/* Preview System Styles */
+
+.preview-section {
+    margin-top: 2rem;
+}
+
+.preview-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    background: #f5f5f5;
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+/* Preview Controls */
+.preview-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    background: white;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.preview-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.page-info {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.page-info input {
+    width: 60px;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    text-align: center;
+}
+
+.zoom-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.zoom-select {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: white;
+}
+
+.btn-icon {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-icon:hover:not(:disabled) {
+    background: #f0f0f0;
+    border-color: #999;
+}
+
+.btn-icon:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Preview Main Area */
+.preview-main {
+    background: #666;
+    border-radius: 6px;
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 500px;
+    overflow: auto;
+}
+
+.preview-main canvas {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    background: white;
+    max-width: 100%;
+    height: auto;
+}
+
+/* Thumbnails */
+.preview-thumbnails {
+    display: flex;
+    gap: 0.5rem;
+    padding: 1rem;
+    background: white;
+    border-radius: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.thumbnails-loading {
+    padding: 2rem;
+    text-align: center;
+    color: #666;
+}
+
+.thumbnail {
+    flex-shrink: 0;
+    width: 100px;
+    cursor: pointer;
+    border: 2px solid transparent;
+    border-radius: 4px;
+    padding: 0.5rem;
+    transition: all 0.2s;
+}
+
+.thumbnail:hover {
+    border-color: #007bff;
+    background: #f0f8ff;
+}
+
+.thumbnail.active {
+    border-color: #0056b3;
+    background: #e6f2ff;
+}
+
+.thumbnail canvas {
+    width: 100%;
+    height: auto;
+    border: 1px solid #ddd;
+    border-radius: 2px;
+}
+
+.thumbnail-label {
+    text-align: center;
+    font-size: 0.75rem;
+    margin-top: 0.25rem;
+    color: #666;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .preview-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .preview-nav,
+    .zoom-controls {
+        justify-content: center;
+    }
+    
+    .preview-main {
+        min-height: 400px;
+        padding: 10px;
+    }
+    
+    .thumbnail {
+        width: 80px;
+    }
+}
+
+/* Touch-friendly for reMarkable */
+@media (pointer: coarse) {
+    .btn-icon {
+        width: 44px;
+        height: 44px;
+        font-size: 1.4rem;
+    }
+    
+    .page-info input {
+        width: 70px;
+        padding: 0.5rem;
+        font-size: 1rem;
+    }
+    
+    .zoom-select {
+        padding: 0.5rem;
+        font-size: 1rem;
+    }
+    
+    .thumbnail {
+        width: 120px;
+        padding: 0.75rem;
+    }
+}
