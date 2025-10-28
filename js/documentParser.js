@@ -132,10 +132,22 @@ const DocumentParser = {
             const x = transform[4];
             const y = transform[5];
 
-            // Check for new line
-            if (lastY !== null && Math.abs(y - lastY) > (lastHeight || 5) * 0.3) {
-                if (text && !text.endsWith('\n')) {
-                    text += '\n';
+            // Check for new line - improved detection
+            if (lastY !== null) {
+                const verticalGap = Math.abs(y - lastY);
+                const lineHeightThreshold = (lastHeight || 5) * 0.3;
+                
+                // Add line break if vertical position changed significantly
+                if (verticalGap > lineHeightThreshold) {
+                    if (text && !text.endsWith('\n')) {
+                        text += '\n';
+                    }
+                }
+                // Also detect paragraph breaks (larger vertical gaps)
+                else if (verticalGap > (lastHeight || 5) * 1.5) {
+                    if (text && !text.endsWith('\n\n')) {
+                        text += '\n\n';
+                    }
                 }
             }
             
