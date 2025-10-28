@@ -259,7 +259,37 @@ const DocumentParser = {
             lastHeight = height;
         }
         
+        // FIX: Reconstruct common ligatures that get split by Type 3 fonts
+        text = this.reconstructLigatures(text);
+        
         return text.trim();
+    },
+
+    /**
+     * Reconstruct ligatures that get split by Type 3 fonts
+     * Fixes issues like "fi x" -> "fix", "di ff erent" -> "different"
+     */
+    reconstructLigatures(text) {
+        // Common ligature patterns that get split
+        const ligaturePatterns = [
+            { pattern: /f\s+i(?=\s|$|[^a-z])/gi, replacement: 'fi' },
+            { pattern: /f\s+f(?=\s|$|[^a-z])/gi, replacement: 'ff' },
+            { pattern: /f\s+l(?=\s|$|[^a-z])/gi, replacement: 'fl' },
+            { pattern: /f\s+f\s+i(?=\s|$|[^a-z])/gi, replacement: 'ffi' },
+            { pattern: /f\s+f\s+l(?=\s|$|[^a-z])/gi, replacement: 'ffl' },
+            // Also handle cases where ligatures are in the middle of words
+            { pattern: /(\w)f\s+i(\w)/gi, replacement: '$1fi$2' },
+            { pattern: /(\w)f\s+f(\w)/gi, replacement: '$1ff$2' },
+            { pattern: /(\w)f\s+l(\w)/gi, replacement: '$1fl$2' },
+            { pattern: /(\w)f\s+f\s+i(\w)/gi, replacement: '$1ffi$2' },
+            { pattern: /(\w)f\s+f\s+l(\w)/gi, replacement: '$1ffl$2' }
+        ];
+        
+        for (const { pattern, replacement } of ligaturePatterns) {
+            text = text.replace(pattern, replacement);
+        }
+        
+        return text;
     },
 
     /**
