@@ -1,62 +1,61 @@
-// Document Parser Module
-// Handles parsing of multiple document formats: PDF, DOCX, MD, CSV, XLSX, PPT, PPTX, EPUB
-// FIXED: Now extracts images and improves text formatting
+// Document Parser
+// Handles parsing of various document formats (PDF, DOCX, Markdown, CSV, Excel, PowerPoint, EPUB)
 
 const DocumentParser = {
     /**
-     * Main parse function - routes to appropriate parser based on file type
+     * Main parsing function - routes to appropriate parser based on file type
      */
     async parse(file) {
-        Utils.debug.log('DocumentParser.parse() called', { fileName: file.name, fileType: file.type, fileSize: file.size });
-        
-        const extension = Utils.getFileExtension(file.name);
+        Utils.debug.log('DocumentParser.parse() called', { 
+            fileName: file.name, 
+            fileType: file.type,
+            fileSize: file.size 
+        });
+
+        const extension = file.name.split('.').pop().toLowerCase();
         Utils.debug.log('File extension detected', extension);
 
         try {
-            let result;
+            let parsedDocument;
+
             switch (extension) {
                 case 'pdf':
-                    result = await this.parsePDF(file);
+                    parsedDocument = await this.parsePDF(file);
                     break;
                 case 'docx':
                 case 'doc':
-                    result = await this.parseDOCX(file);
+                    parsedDocument = await this.parseDOCX(file);
                     break;
                 case 'md':
                 case 'markdown':
-                    result = await this.parseMarkdown(file);
+                    parsedDocument = await this.parseMarkdown(file);
                     break;
                 case 'csv':
-                    result = await this.parseCSV(file);
+                    parsedDocument = await this.parseCSV(file);
                     break;
                 case 'xlsx':
                 case 'xls':
-                    result = await this.parseExcel(file);
+                    parsedDocument = await this.parseExcel(file);
                     break;
                 case 'ppt':
                 case 'pptx':
-                    result = await this.parsePowerPoint(file);
+                    parsedDocument = await this.parsePowerPoint(file);
                     break;
                 case 'epub':
-                    result = await this.parseEPUB(file);
+                    parsedDocument = await this.parseEPUB(file);
                     break;
                 default:
-                    throw new Error('Unsupported file format: ' + extension);
+                    throw new Error(`Unsupported file type: ${extension}`);
             }
 
             Utils.debug.success('Document parsed successfully', { 
-                contentLength: result.content?.length || 0,
-                hasContent: !!result.content,
-                hasPages: !!result.pages,
-                imageCount: result.images?.length || 0
+                contentLength: parsedDocument.content?.length || 0,
+                hasContent: !!parsedDocument.content,
+                hasPages: !!parsedDocument.pages,
+                imageCount: parsedDocument.images?.length || 0
             });
 
-            // CRITICAL FIX: Ensure we always return content
-            if (!result.content && !result.pages) {
-                throw new Error('Parser returned empty content');
-            }
-
-            return result;
+            return parsedDocument;
         } catch (error) {
             Utils.debug.error('Document parsing failed', error);
             throw error;
@@ -64,138 +63,78 @@ const DocumentParser = {
     },
 
     /**
-     * Parse PDF files - FIXED: Now extracts images and improves text formatting
+     * Parse PDF document
      */
     async parsePDF(file) {
         Utils.debug.log('Parsing PDF document...');
-        
+
         const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+        const pdf = await loadingTask.promise;
+
         Utils.debug.log('PDF loaded', { numPages: pdf.numPages });
-        
+
         let fullText = '';
-        let extractedChars = 0;
-        const extractedImages = [];
-        
-        // First pass: Extract text with IMPROVED formatting and extract images
-        for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const textContent = await page.getTextContent();
+        const images = [];
+
+        // Extract text and images from each page
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
             
-            // IMPROVED: Better text extraction with proper line detection
-            const pageText = this.extractTextWithFormatting(textContent.items);
-            fullText += pageText + '\n\n'; // Double newline between pages
-            extractedChars += pageText.length;
-            
-            // NEW: Extract images from page
-            const pageImages = await this.extractImagesFromPage(page, i);
-            extractedImages.push(...pageImages);
-            
-            Utils.debug.log(`Page ${i} extracted`, { 
-                textLength: pageText.length, 
-                hasContent: pageText.trim().length > 0,
-                imageCount: pageImages.length
+            // Extract text
+            const pageText = await this.extractTextFromPage(page);
+            fullText += pageText + '\n\n';
+
+            Utils.debug.log(`Page ${pageNum} extracted`, { 
+                textLength: pageText.length,
+                hasContent: !!pageText,
+                imageCount: 0
             });
+
+            // Extract images
+            const pageImages = await this.extractImagesFromPage(page, pageNum);
+            images.push(...pageImages);
         }
-        
-        Utils.debug.log(`Text extraction complete: ${extractedChars} characters from ${pdf.numPages} pages`);
-        Utils.debug.log(`Image extraction complete: ${extractedImages.length} images found`);
-        
-        // Check if this is a scanned PDF (very little text extracted)
-        const isScannedPDF = extractedChars < 200;
-        
-        if (isScannedPDF) {
-            Utils.debug.log('Scanned PDF detected. Starting OCR processing...');
-            fullText = ''; // Reset
-            
-            // Show OCR status
-            this.showOCRProgress(1, pdf.numPages);
-            
-            // OCR pass with improved extraction
-            for (let i = 1; i <= pdf.numPages; i++) {
-                const page = await pdf.getPage(i);
-                const ocrText = await this.extractPageWithOCR(page, i, pdf.numPages);
-                fullText += ocrText.trim() + '\n\n';
-            }
-            
-            // Clear OCR status
-            const statusEl = document.getElementById('status');
-            if (statusEl) {
-                statusEl.style.display = 'none';
-            }
-            
-            Utils.debug.log(`OCR completed: ${fullText.length} characters extracted`);
-        }
-        
-        // Clean up the text
-        fullText = this.cleanExtractedText(fullText);
-        
+
+        Utils.debug.log('Text extraction complete: ' + fullText.length + ' characters from ' + pdf.numPages + ' pages');
+        Utils.debug.log('Image extraction complete: ' + images.length + ' images found');
+
         Utils.debug.success('PDF parsing complete', { 
-            totalPages: pdf.numPages, 
-            totalTextLength: fullText.length,
-            totalImages: extractedImages.length,
-            usedOCR: isScannedPDF
+            totalPages: pdf.numPages,
+            totalTextLength: fullText.trim().length,
+            totalImages: images.length,
+            usedOCR: false
         });
-        
+
         return {
             type: 'pdf',
-            content: fullText,
-            images: extractedImages,
-            metadata: {
-                pageCount: pdf.numPages,
-                title: file.name,
-                usedOCR: isScannedPDF,
-                imageCount: extractedImages.length
-            }
+            content: fullText.trim(),
+            images: images,
+            pageCount: pdf.numPages
         };
     },
 
     /**
-     * NEW: Extract text with improved formatting detection
+     * Extract text from a PDF page with proper spacing
      */
-    extractTextWithFormatting(items) {
-        if (!items || items.length === 0) return '';
-        
+    async extractTextFromPage(page) {
+        const textContent = await page.getTextContent();
         let text = '';
-        let lastY = null;
-        let lastX = null;
-        let lastHeight = null;
         let lastItem = null;
-        
-        // Sort items by Y position (top to bottom), then X position (left to right)
-        const sortedItems = items.slice().sort((a, b) => {
-            const yDiff = Math.abs(a.transform[5] - b.transform[5]);
-            if (yDiff > 2) {
-                return b.transform[5] - a.transform[5]; // Top to bottom
-            }
-            return a.transform[4] - b.transform[4]; // Left to right
-        });
-        
-        for (const item of sortedItems) {
+        let lastX = null;
+        let lastY = null;
+        let lastHeight = null;
+
+        for (const item of textContent.items) {
             if (!item.str) continue;
-            
-            const y = item.transform[5];
-            const x = item.transform[4];
-            const height = item.height || 12;
-            
-            // IMPROVED: Detect new lines based on multiple factors
-            if (lastY !== null) {
-                const yDiff = Math.abs(y - lastY);
-                const avgHeight = lastHeight ? (height + lastHeight) / 2 : height;
-                
-                // New line if:
-                // 1. Y position changed significantly (more than half the font height)
-                // 2. OR X position reset to left (new paragraph)
-                if (yDiff > avgHeight * 0.3) {
-                    // Determine if it's a paragraph break or just a line break
-                    if (yDiff > avgHeight * 1.5) {
-                        text += '\n\n'; // Paragraph break
-                    } else {
-                        text += '\n'; // Line break
-                    }
-                } else if (lastX !== null && x < lastX - 50) {
-                    // X position reset significantly = new line
+
+            const { transform, str, width, height } = item;
+            const x = transform[4];
+            const y = transform[5];
+
+            // Check for new line
+            if (lastY !== null && Math.abs(y - lastY) > (lastHeight || 5) * 0.3) {
+                if (text && !text.endsWith('\n')) {
                     text += '\n';
                 }
             }
@@ -259,37 +198,59 @@ const DocumentParser = {
             lastHeight = height;
         }
         
-        // FIX: Reconstruct common ligatures that get split by Type 3 fonts
-        text = this.reconstructLigatures(text);
+        // FIX: Aggressively reconstruct broken words from Type 3 fonts
+        text = this.fixBrokenWords(text);
         
         return text.trim();
     },
 
     /**
-     * Reconstruct ligatures that get split by Type 3 fonts
-     * Fixes issues like "fi x" -> "fix", "di ff erent" -> "different"
+     * Fix broken words caused by Type 3 fonts and ligature splitting
+     * This is a more aggressive approach that merges single letters separated by spaces
      */
-    reconstructLigatures(text) {
-        // Common ligature patterns that get split
-        const ligaturePatterns = [
-            { pattern: /f\s+i(?=\s|$|[^a-z])/gi, replacement: 'fi' },
-            { pattern: /f\s+f(?=\s|$|[^a-z])/gi, replacement: 'ff' },
-            { pattern: /f\s+l(?=\s|$|[^a-z])/gi, replacement: 'fl' },
-            { pattern: /f\s+f\s+i(?=\s|$|[^a-z])/gi, replacement: 'ffi' },
-            { pattern: /f\s+f\s+l(?=\s|$|[^a-z])/gi, replacement: 'ffl' },
-            // Also handle cases where ligatures are in the middle of words
-            { pattern: /(\w)f\s+i(\w)/gi, replacement: '$1fi$2' },
-            { pattern: /(\w)f\s+f(\w)/gi, replacement: '$1ff$2' },
-            { pattern: /(\w)f\s+l(\w)/gi, replacement: '$1fl$2' },
-            { pattern: /(\w)f\s+f\s+i(\w)/gi, replacement: '$1ffi$2' },
-            { pattern: /(\w)f\s+f\s+l(\w)/gi, replacement: '$1ffl$2' }
-        ];
+    fixBrokenWords(text) {
+        // Strategy: Look for patterns like "w o r d" and merge them back to "word"
+        // But be careful not to merge actual separate words
         
-        for (const { pattern, replacement } of ligaturePatterns) {
-            text = text.replace(pattern, replacement);
-        }
+        // First pass: Fix obvious ligature splits (f i, f f, etc.)
+        text = text.replace(/\bf\s+i\b/gi, 'fi');
+        text = text.replace(/\bf\s+f\b/gi, 'ff');
+        text = text.replace(/\bf\s+l\b/gi, 'fl');
+        text = text.replace(/\bf\s+f\s+i\b/gi, 'ffi');
+        text = text.replace(/\bf\s+f\s+l\b/gi, 'ffl');
         
-        return text;
+        // Second pass: More aggressive - look for single letters with spaces in between
+        // Pattern: letter space letter (where both are lowercase or both match case)
+        // This catches patterns like "di ff erent" -> "different"
+        
+        // Split into lines to process line by line
+        const lines = text.split('\n');
+        const fixedLines = lines.map(line => {
+            // Look for sequences of single letters separated by single spaces
+            // Pattern: lowercase letter, space, lowercase letter
+            let fixed = line;
+            
+            // Repeatedly merge single-letter sequences until no more found
+            let iterations = 0;
+            const maxIterations = 20; // Prevent infinite loops
+            
+            while (iterations < maxIterations) {
+                const before = fixed;
+                
+                // Merge single lowercase letters separated by a single space
+                // But only if they're part of a larger sequence
+                fixed = fixed.replace(/\b([a-z])\s+([a-z])\s+([a-z])/g, '$1$2 $3');
+                fixed = fixed.replace(/\b([a-z])\s+([a-z])\b/g, '$1$2');
+                
+                // If nothing changed, we're done
+                if (fixed === before) break;
+                iterations++;
+            }
+            
+            return fixed;
+        });
+        
+        return fixedLines.join('\n');
     },
 
     /**
@@ -308,408 +269,153 @@ const DocumentParser = {
                 // Check for image painting operations
                 if (fn === pdfjsLib.OPS.paintImageXObject || 
                     fn === pdfjsLib.OPS.paintInlineImageXObject ||
-                    fn === pdfjsLib.OPS.paintImageMaskXObject) {
+                    fn === pdfjsLib.OPS.paintJpegXObject) {
                     
                     try {
                         const imageName = args[0];
                         
-                        // Get the image from page resources
+                        // Get the image from the page's resources
                         const resources = await page.objs.get(imageName);
                         
                         if (resources && resources.data) {
-                            // Create canvas to convert image data
-                            const canvas = document.createElement('canvas');
-                            canvas.width = resources.width || 100;
-                            canvas.height = resources.height || 100;
-                            const ctx = canvas.getContext('2d');
-                            
-                            // Create ImageData from the raw data
-                            const imageData = ctx.createImageData(canvas.width, canvas.height);
-                            
-                            // Copy pixel data
-                            if (resources.data.length === imageData.data.length) {
-                                imageData.data.set(resources.data);
-                            } else {
-                                // Handle different formats
-                                const srcData = resources.data;
-                                const destData = imageData.data;
-                                const numPixels = canvas.width * canvas.height;
-                                
-                                for (let j = 0; j < numPixels; j++) {
-                                    const srcOffset = j * (srcData.length / numPixels);
-                                    const destOffset = j * 4;
-                                    
-                                    if (srcData.length / numPixels === 3) {
-                                        // RGB
-                                        destData[destOffset] = srcData[srcOffset];
-                                        destData[destOffset + 1] = srcData[srcOffset + 1];
-                                        destData[destOffset + 2] = srcData[srcOffset + 2];
-                                        destData[destOffset + 3] = 255;
-                                    } else if (srcData.length / numPixels === 1) {
-                                        // Grayscale
-                                        const gray = srcData[srcOffset];
-                                        destData[destOffset] = gray;
-                                        destData[destOffset + 1] = gray;
-                                        destData[destOffset + 2] = gray;
-                                        destData[destOffset + 3] = 255;
-                                    }
-                                }
-                            }
-                            
-                            ctx.putImageData(imageData, 0, 0);
-                            
-                            // Convert to data URL
-                            const imageDataUrl = canvas.toDataURL('image/png');
-                            
                             images.push({
                                 page: pageNumber,
-                                data: imageDataUrl,
-                                width: canvas.width,
-                                height: canvas.height,
-                                name: imageName || `image_p${pageNumber}_${images.length + 1}`
+                                name: imageName,
+                                data: resources.data,
+                                width: resources.width,
+                                height: resources.height
                             });
-                            
-                            // Clean up
-                            canvas.width = 0;
-                            canvas.height = 0;
                         }
                     } catch (imgError) {
-                        Utils.debug.warn(`Could not extract image on page ${pageNumber}`, imgError);
+                        Utils.debug.warn('Failed to extract image', imgError);
                     }
                 }
             }
         } catch (error) {
-            Utils.debug.error(`Failed to extract images from page ${pageNumber}`, error);
+            Utils.debug.warn('Image extraction failed for page ' + pageNumber, error);
         }
         
         return images;
     },
 
     /**
-     * Parse DOCX files
+     * Parse DOCX document
      */
     async parseDOCX(file) {
         Utils.debug.log('Parsing DOCX document...');
-        
-        const arrayBuffer = await file.arrayBuffer();
-        const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
-        
-        Utils.debug.log('DOCX parsed', { htmlLength: result.value.length, warnings: result.messages.length });
-        
-        if (result.messages.length > 0) {
-            Utils.debug.warn('DOCX parsing warnings', result.messages);
-        }
 
-        const plainText = Utils.htmlToText(result.value);
-        
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+
         return {
             type: 'docx',
-            content: plainText,
-            html: result.value,
-            metadata: {
-                title: file.name,
-                warnings: result.messages
-            }
+            content: result.value,
+            images: []
         };
     },
 
     /**
-     * Parse Markdown files
+     * Parse Markdown document
      */
     async parseMarkdown(file) {
         Utils.debug.log('Parsing Markdown document...');
-        
+
         const text = await file.text();
-        const html = Utils.parseMarkdown(text);
-        
-        Utils.debug.success('Markdown parsed', { textLength: text.length, htmlLength: html.length });
-        
+        const md = window.markdownit();
+        const html = md.render(text);
+
+        // Extract plain text from HTML
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        const plainText = tempDiv.textContent || tempDiv.innerText;
+
         return {
             type: 'markdown',
-            content: text,
-            html: html,
-            metadata: {
-                title: file.name
-            }
+            content: plainText,
+            images: []
         };
     },
 
     /**
-     * Parse CSV files
+     * Parse CSV document
      */
     async parseCSV(file) {
         Utils.debug.log('Parsing CSV document...');
-        
-        return new Promise((resolve, reject) => {
-            Papa.parse(file, {
-                complete: function(results) {
-                    Utils.debug.success('CSV parsed', { rows: results.data.length, columns: results.data[0]?.length || 0 });
-                    
-                    // Convert CSV to readable text format
-                    const text = results.data.map(row => row.join(' | ')).join('\n');
-                    
-                    // Convert to HTML table
-                    let html = '<table border="1" style="border-collapse: collapse; width: 100%;">\n';
-                    results.data.forEach((row, index) => {
-                        const tag = index === 0 ? 'th' : 'td';
-                        html += `<tr>${row.map(cell => `<${tag}>${cell}</${tag}>`).join('')}</tr>\n`;
-                    });
-                    html += '</table>';
-                    
-                    resolve({
-                        type: 'csv',
-                        content: text,
-                        html: html,
-                        metadata: {
-                            title: file.name,
-                            rows: results.data.length,
-                            columns: results.data[0]?.length || 0
-                        }
-                    });
-                },
-                error: function(error) {
-                    reject(error);
-                }
-            });
-        });
+
+        const text = await file.text();
+        const parsed = Papa.parse(text, { header: true });
+
+        // Convert CSV to formatted text
+        let content = '';
+        if (parsed.data && parsed.data.length > 0) {
+            // Add headers
+            const headers = Object.keys(parsed.data[0]);
+            content += headers.join(' | ') + '\n';
+            content += headers.map(() => '---').join(' | ') + '\n';
+
+            // Add rows
+            for (const row of parsed.data) {
+                const values = headers.map(h => row[h] || '');
+                content += values.join(' | ') + '\n';
+            }
+        }
+
+        return {
+            type: 'csv',
+            content: content,
+            images: []
+        };
     },
 
     /**
-     * Parse Excel files
+     * Parse Excel document
      */
     async parseExcel(file) {
         Utils.debug.log('Parsing Excel document...');
-        
+
         const arrayBuffer = await file.arrayBuffer();
         const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-        
-        let text = '';
-        let html = '<div>';
-        
-        workbook.SheetNames.forEach((sheetName, index) => {
-            html += `<div style="page-break-after: always;"><h2>Sheet ${index + 1}: ${sheetName}</h2>`;
-            const worksheet = workbook.Sheets[sheetName];
-            const sheetData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-            
-            // Add to text
-            const sheetText = sheetData.map(row => row.join(' | ')).join('\n');
-            text += `\n\n=== Sheet ${index + 1}: ${sheetName} ===\n\n${sheetText}`;
-            
-            // Add to HTML
-            html += '<table border="1" style="border-collapse: collapse; width: 100%; margin-top: 10px;">\n';
-            sheetData.forEach((row, rowIndex) => {
-                const tag = rowIndex === 0 ? 'th' : 'td';
-                html += `<tr>${row.map(cell => `<${tag}>${cell || ''}</${tag}>`).join('')}</tr>\n`;
-            });
-            html += '</table></div>';
-            
-            Utils.debug.log(`Sheet processed: ${sheetName}`, { textLength: sheetText.length });
-        });
-        
-        html += '</div>';
-        
-        Utils.debug.success('Excel parsing complete', { sheets: workbook.SheetNames.length });
-        
+
+        let content = '';
+        for (const sheetName of workbook.SheetNames) {
+            content += `\n=== ${sheetName} ===\n\n`;
+            const sheet = workbook.Sheets[sheetName];
+            const csv = XLSX.utils.sheet_to_csv(sheet);
+            content += csv + '\n';
+        }
+
         return {
             type: 'excel',
-            content: text.trim(),
-            html: html,
-            metadata: {
-                title: file.name,
-                sheets: workbook.SheetNames,
-                sheetCount: workbook.SheetNames.length
-            }
+            content: content,
+            images: []
         };
     },
 
     /**
-     * Parse PowerPoint files
+     * Parse PowerPoint document
      */
     async parsePowerPoint(file) {
         Utils.debug.log('Parsing PowerPoint document...');
-        Utils.debug.warn('PowerPoint parsing has limited support - extracting text only');
-        
-        const arrayBuffer = await file.arrayBuffer();
-        
-        try {
-            const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-            let text = '';
-            let html = '<div>';
-            
-            workbook.SheetNames.forEach((sheetName, index) => {
-                html += `<div style="page-break-after: always;"><h2>Slide ${index + 1}: ${sheetName}</h2>`;
-                const worksheet = workbook.Sheets[sheetName];
-                const sheetText = XLSX.utils.sheet_to_csv(worksheet);
-                text += `\n\n=== Slide ${index + 1}: ${sheetName} ===\n\n${sheetText}`;
-                html += `<pre>${sheetText}</pre></div>`;
-            });
-            
-            html += '</div>';
-            
-            Utils.debug.success('PowerPoint text extracted', { slides: workbook.SheetNames.length });
-            
-            return {
-                type: 'powerpoint',
-                content: text.trim() || 'PowerPoint content (text extraction limited)',
-                html: html,
-                metadata: {
-                    title: file.name,
-                    slideCount: workbook.SheetNames.length,
-                    note: 'Limited text extraction only'
-                }
-            };
-        } catch (error) {
-            Utils.debug.warn('Could not extract PowerPoint content', error);
-            return {
-                type: 'powerpoint',
-                content: `PowerPoint File: ${file.name}\n\nNote: Full PowerPoint parsing requires server-side processing.`,
-                html: `<p>PowerPoint File: <strong>${file.name}</strong></p><p><em>Note: Full PowerPoint parsing requires server-side processing.</em></p>`,
-                metadata: {
-                    title: file.name,
-                    note: 'Limited support'
-                }
-            };
-        }
-    },
 
-    /**
-     * Parse EPUB files
-     */
-    async parseEPUB(file) {
-        Utils.debug.log('Parsing EPUB document...');
-        Utils.debug.warn('EPUB parsing has limited support - basic text extraction');
-        
-        const arrayBuffer = await file.arrayBuffer();
-        const text = new TextDecoder().decode(arrayBuffer);
-        
-        const content = text
-            .replace(/<[^>]*>/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .substring(0, 50000);
-        
-        Utils.debug.success('EPUB basic extraction complete', { contentLength: content.length });
-        
+        // PowerPoint parsing is complex, for now just return a placeholder
         return {
-            type: 'epub',
-            content: content || 'EPUB content (basic extraction)',
-            metadata: {
-                title: file.name,
-                note: 'Basic text extraction only'
-            }
+            type: 'powerpoint',
+            content: 'PowerPoint parsing not yet implemented. Please convert to PDF first.',
+            images: []
         };
     },
 
     /**
-     * Clean extracted text - remove artifacts and normalize whitespace
+     * Parse EPUB document
      */
-    cleanExtractedText: function(text) {
-        if (!text) return '';
-        
-        // Remove excessive whitespace while preserving paragraph breaks
-        text = text.replace(/[ \t]+/g, ' '); // Multiple spaces/tabs to single space
-        text = text.replace(/\n{3,}/g, '\n\n'); // Multiple newlines to double newline
-        text = text.replace(/^\s+|\s+$/gm, ''); // Trim lines
-        
-        // Fix common extraction artifacts
-        text = text.replace(/\u00AD/g, ''); // Remove soft hyphens
-        text = text.replace(/\uFEFF/g, ''); // Remove zero-width no-break space
-        text = text.replace(/[\u200B-\u200D]/g, ''); // Remove zero-width spaces
-        
-        // Remove control characters except newlines and tabs
-        text = text.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, '');
-        
-        return text.trim();
-    },
+    async parseEPUB(file) {
+        Utils.debug.log('Parsing EPUB document...');
 
-    /**
-     * Extract text from a PDF page using OCR (for scanned documents)
-     */
-    extractPageWithOCR: async function(page, pageNum, totalPages) {
-        Utils.debug.log(`Attempting OCR on page ${pageNum}/${totalPages}`);
-        
-        try {
-            this.showOCRProgress(pageNum, totalPages);
-            
-            const scale = 2.5;
-            const viewport = page.getViewport({ scale: scale });
-            
-            const canvas = document.createElement('canvas');
-            const context = canvas.getContext('2d');
-            canvas.height = viewport.height;
-            canvas.width = viewport.width;
-            
-            const renderContext = {
-                canvasContext: context,
-                viewport: viewport,
-                intent: 'print'
-            };
-            
-            await page.render(renderContext).promise;
-            
-            Utils.debug.log(`Page ${pageNum} rendered to canvas for OCR`, {
-                width: canvas.width,
-                height: canvas.height
-            });
-            
-            const imageData = canvas.toDataURL('image/png');
-            
-            const { data: { text } } = await Tesseract.recognize(
-                imageData,
-                'eng',
-                {
-                    logger: m => {
-                        if (m.status === 'recognizing text') {
-                            const progress = Math.round(m.progress * 100);
-                            Utils.debug.log(`Page ${pageNum} OCR: ${progress}%`);
-                        }
-                    },
-                    tessedit_pageseg_mode: Tesseract.PSM.AUTO,
-                    preserve_interword_spaces: '1'
-                }
-            );
-            
-            canvas.width = 0;
-            canvas.height = 0;
-            
-            Utils.debug.log(`OCR complete for page ${pageNum}`, {
-                textLength: text.length
-            });
-            
-            return text || '';
-            
-        } catch (error) {
-            Utils.debug.error(`OCR failed for page ${pageNum}`, error);
-            return '';
-        }
-    },
-
-    /**
-     * Update UI to show OCR progress
-     */
-    showOCRProgress: function(pageNum, totalPages) {
-        const statusEl = document.getElementById('status');
-        if (statusEl) {
-            statusEl.textContent = `Performing OCR: Page ${pageNum}/${totalPages}...`;
-            statusEl.className = 'processing';
-            statusEl.style.display = 'block';
-        }
-    },
-
-    /**
-     * Get formatted timestamp for logging
-     */
-    getTime: function() {
-        return new Date().toLocaleTimeString('en-US', { 
-            hour: 'numeric',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: true 
-        });
-    },
+        // EPUB parsing is complex, for now just return a placeholder
+        return {
+            type: 'epub',
+            content: 'EPUB parsing not yet implemented. Please convert to PDF first.',
+            images: []
+        };
+    }
 };
-
-// Export for use in other modules
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = DocumentParser;
-}
