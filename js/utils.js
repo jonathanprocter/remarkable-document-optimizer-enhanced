@@ -214,11 +214,11 @@ const Utils = {
     getRemarkableSpecs: function() {
         return {
             displaySize: 7.3, // inches
-            widthMM: 195.6,
-            heightMM: 107.8,
-            widthPx: 1696,
-            heightPx: 954,
-            aspectRatio: 1696 / 954,
+            widthMM: 107.8,  // PORTRAIT: width (narrower dimension)
+            heightMM: 195.6, // PORTRAIT: height (taller dimension)
+            widthPx: 954,    // PORTRAIT: width in pixels
+            heightPx: 1696,  // PORTRAIT: height in pixels
+            aspectRatio: 954 / 1696, // PORTRAIT aspect ratio
             dpi: 226,
             colorMode: 'eink' // E Ink Kaleido 3
         };
