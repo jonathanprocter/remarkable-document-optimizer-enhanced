@@ -173,8 +173,12 @@ const PDFOptimizer = {
         contentText = Utils.sanitizeText(contentText);
         Utils.debug.log('Text sanitized', { finalLength: contentText.length });
 
-        // Split text into lines that fit on page
-        const lines = this.splitTextIntoLines(doc, contentText, contentWidth);
+        // Process text with structure awareness
+        const structuredText = this.processStructuredText(contentText);
+        Utils.debug.log('Text structure processed', { elements: structuredText.length });
+        
+        // Split text into lines that fit on page WITH formatting
+        const lines = this.wrapStructuredTextToLines(doc, structuredText, contentWidth, fontSize);
         Utils.debug.success('Text split into lines', { lineCount: lines.length });
 
         // Render lines with pagination and image insertion
@@ -197,9 +201,22 @@ const PDFOptimizer = {
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
             
+            // Handle structured line objects or plain strings
+            let lineText = '';
+            let lineStyle = 'paragraph';
+            let lineIndent = 0;
+            
+            if (typeof line === 'object' && line !== null) {
+                lineText = line.text || '';
+                lineStyle = line.style || 'paragraph';
+                lineIndent = line.indent || 0;
+            } else {
+                lineText = line || '';
+            }
+            
             // Skip empty lines but still move cursor
-            if (!line || line.trim().length === 0) {
-                currentY += lineHeight;
+            if (!lineText || lineText.trim().length === 0) {
+                currentY += lineHeight * 0.5; // Half spacing for blank lines
                 continue;
             }
 
@@ -221,9 +238,21 @@ const PDFOptimizer = {
                 linesOnPage = 0;
             }
 
-            // Render the text to PDF
+            // Render the text to PDF with proper formatting
             try {
-                doc.text(line, marginX, currentY);
+                // Apply style-specific formatting
+                if (lineStyle === 'heading') {
+                    doc.setFont(undefined, 'bold');
+                    doc.setFontSize(fontSize + 2);
+                } else {
+                    doc.setFont(undefined, 'normal');
+                    doc.setFontSize(fontSize);
+                }
+                
+                // Calculate x position with indentation
+                const xPos = marginX + (lineIndent * 5); // 5mm per indent level
+                
+                doc.text(lineText, xPos, currentY);
                 linesOnPage++;
                 
                 // Debug every 50 lines
@@ -589,10 +618,215 @@ const PDFOptimizer = {
         // Trim each line
         text = text.split('\n').map(line => line.trim()).join('\n');
         
-        return text.trim();
+         return text.trim();
+    },
+
+    /**
+     * Process text with structure awareness (headings, lists, paragraphs)
+     */
+    processStructuredText: function(text) {
+        const lines = text.split('\n');
+        const structured = [];
+        
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            
+            if (!line) {
+                structured.push({ type: 'blank', content: '' });
+                continue;
+            }
+            
+            // Detect numbered lists (1., 2., 3. or 1), 2), 3))
+            if (/^\d+[\.\)]\s/.test(line)) {
+                const match = line.match(/^(\d+[\.\)])\s+(.+)$/);
+                if (match) {
+                    structured.push({
+                        type: 'numbered',
+                        number: match[1],
+                        content: match[2],
+                        indent: 0
+                    });
+                    continue;
+                }
+            }
+            
+            // Detect bullet points (•, -, *, ○, ▪)
+            if (/^[•\-\*○▪]\s/.test(line)) {
+                const match = line.match(/^([•\-\*○▪])\s+(.+)$/);
+                if (match) {
+                    structured.push({
+                        type: 'bullet',
+                        bullet: match[1],
+                        content: match[2],
+                        indent: 0
+                    });
+                    continue;
+                }
+            }
+            
+            // Detect headings (ALL CAPS or ending with :)
+            if (line === line.toUpperCase() && line.length < 100 && /[A-Z]/.test(line)) {
+                structured.push({
+                    type: 'heading',
+                    content: line,
+                    level: 1
+                });
+                continue;
+            }
+            
+            if (line.endsWith(':') && line.length < 80) {
+                structured.push({
+                    type: 'heading',
+                    content: line,
+                    level: 2
+                });
+                continue;
+            }
+            
+            // Detect indented content (starts with spaces or tabs)
+            const indentMatch = line.match(/^(\s+)(.+)$/);
+            if (indentMatch) {
+                const indentLevel = Math.floor(indentMatch[1].length / 2);
+                structured.push({
+                    type: 'indented',
+                    content: indentMatch[2],
+                    indent: indentLevel
+                });
+                continue;
+            }
+            
+            // Regular paragraph
+            structured.push({
+                type: 'paragraph',
+                content: line
+            });
+        }
+        
+        return structured;
+    },
+
+    /**
+     * Wrap structured text to lines with proper formatting
+     */
+    wrapStructuredTextToLines: function(pdf, structuredText, maxWidth, fontSize) {
+        const allLines = [];
+        const indentWidth = 5; // mm per indent level
+        const bulletWidth = 5; // mm for bullet/number
+        
+        for (const item of structuredText) {
+            switch (item.type) {
+                case 'blank':
+                    allLines.push('');
+                    break;
+                    
+                case 'heading':
+                    // Add spacing before heading
+                    if (allLines.length > 0 && allLines[allLines.length - 1] !== '') {
+                        allLines.push('');
+                    }
+                    
+                    // Headings in bold (we'll handle this in rendering)
+                    allLines.push({
+                        text: item.content,
+                        style: 'heading',
+                        level: item.level
+                    });
+                    
+                    // Add spacing after heading
+                    allLines.push('');
+                    break;
+                    
+                case 'numbered':
+                case 'bullet':
+                    const prefix = item.type === 'numbered' ? item.number + ' ' : item.bullet + ' ';
+                    const contentWidth = maxWidth - (item.indent * indentWidth) - bulletWidth;
+                    
+                    // Wrap the content
+                    const wrappedContent = this.wrapSingleParagraph(pdf, item.content, contentWidth);
+                    
+                    // First line gets the bullet/number
+                    allLines.push({
+                        text: prefix + wrappedContent[0],
+                        indent: item.indent,
+                        style: 'list'
+                    });
+                    
+                    // Subsequent lines are indented to align with first line text
+                    for (let i = 1; i < wrappedContent.length; i++) {
+                        allLines.push({
+                            text: '  ' + wrappedContent[i], // Extra indent for continuation
+                            indent: item.indent,
+                            style: 'list-continue'
+                        });
+                    }
+                    break;
+                    
+                case 'indented':
+                    const indentedWidth = maxWidth - (item.indent * indentWidth);
+                    const wrappedIndented = this.wrapSingleParagraph(pdf, item.content, indentedWidth);
+                    
+                    for (const line of wrappedIndented) {
+                        allLines.push({
+                            text: line,
+                            indent: item.indent,
+                            style: 'indented'
+                        });
+                    }
+                    break;
+                    
+                case 'paragraph':
+                    const wrappedPara = this.wrapSingleParagraph(pdf, item.content, maxWidth);
+                    
+                    for (const line of wrappedPara) {
+                        allLines.push({
+                            text: line,
+                            style: 'paragraph'
+                        });
+                    }
+                    
+                    // Add spacing after paragraph
+                    allLines.push('');
+                    break;
+            }
+        }
+        
+        return allLines;
+    },
+
+    /**
+     * Wrap a single paragraph to fit width
+     */
+    wrapSingleParagraph: function(pdf, text, maxWidth) {
+        const words = text.split(/\s+/);
+        const lines = [];
+        let currentLine = '';
+        
+        for (const word of words) {
+            const testLine = currentLine ? `${currentLine} ${word}` : word;
+            const lineWidth = pdf.getTextWidth(testLine);
+            
+            if (lineWidth <= maxWidth) {
+                currentLine = testLine;
+            } else {
+                if (currentLine) {
+                    lines.push(currentLine);
+                    currentLine = word;
+                } else {
+                    // Single word is too long - break it
+                    const brokenWords = this.breakLongWord(pdf, word, maxWidth);
+                    lines.push(...brokenWords.slice(0, -1));
+                    currentLine = brokenWords[brokenWords.length - 1];
+                }
+            }
+        }
+        
+        if (currentLine) {
+            lines.push(currentLine);
+        }
+        
+        return lines.length > 0 ? lines : [''];
     },
 };
-
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = PDFOptimizer;
