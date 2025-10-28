@@ -98,6 +98,10 @@ const DocumentParser = {
 
         Utils.debug.log('Text extraction complete: ' + fullText.length + ' characters from ' + pdf.numPages + ' pages');
         Utils.debug.log('Image extraction complete: ' + images.length + ' images found');
+        
+        // Apply smart formatting cleanup
+        fullText = this.smartFormatCleanup(fullText);
+        Utils.debug.log('Smart formatting applied');
 
         Utils.debug.success('PDF parsing complete', { 
             totalPages: pdf.numPages,
@@ -421,13 +425,39 @@ const DocumentParser = {
      * Parse EPUB document
      */
     async parseEPUB(file) {
-        Utils.debug.log('Parsing EPUB document...');
-
+         Utils.debug.log('Parsing EPUB document...');
         // EPUB parsing is complex, for now just return a placeholder
         return {
             type: 'epub',
             content: 'EPUB parsing not yet implemented. Please convert to PDF first.',
             images: []
         };
+    },
+    
+    /**
+     * Smart formatting cleanup - adds line breaks for better structure
+     * This preserves numbered lists, headings, and paragraph breaks
+     */
+    smartFormatCleanup(text) {
+        // Add line breaks before numbered items (1., 2., 3. or 1), 2), 3))
+        text = text.replace(/(\S)(\d+[\.\)])\s+/g, '$1\n$2 ');
+        
+        // Add line breaks before bullet points
+        text = text.replace(/(\S)([•\-\*○▪])\s+/g, '$1\n$2 ');
+        
+        // Add line breaks before common question patterns
+        text = text.replace(/(\S)(Question\s+\d+)/gi, '$1\n\n$2');
+        text = text.replace(/(\S)(Q\d+[\.:])/g, '$1\n\n$2');
+        
+        // Detect and add spacing around ALL CAPS headings (at least 3 chars, max 80 chars)
+        text = text.replace(/(\S)([A-Z][A-Z\s]{2,78}[A-Z])(?=[a-z]|\d)/g, '$1\n\n$2\n\n');
+        
+        // Add line breaks before common section headers
+        text = text.replace(/(\S)(Contents|Introduction|Summary|Conclusion|References|Appendix):/gi, '$1\n\n$2:');
+        
+        // Clean up excessive line breaks (max 2)
+        text = text.replace(/\n{3,}/g, '\n\n');
+        
+        return text;
     }
 };
