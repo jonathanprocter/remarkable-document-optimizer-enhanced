@@ -439,12 +439,21 @@ const DocumentParser = {
      * This preserves numbered lists, headings, and paragraph breaks
      */
     smartFormatCleanup(text) {
+        Utils.debug.log('smartFormatCleanup BEFORE:', {
+            length: text.length,
+            firstChars: text.substring(0, 200),
+            hasEncoding: text.includes('ð'),
+            hasConcatenations: text.includes('separationanxiety') || text.includes('majorattachment')
+        });
+        
         // Fix encoding issues - replace ðý with proper bullet (multiple patterns)
+        const beforeEncoding = text.length;
         text = text.replace(/ðý/g, '\n• ');
         text = text.replace(/ð ý/g, '\n• ');
         text = text.replace(/ð\s*ý/g, '\n• ');
         text = text.replace(/ðý/g, '\n• ');
         text = text.replace(/ð ý/g, '\n• ');
+        Utils.debug.log('Encoding fixes applied:', { before: beforeEncoding, after: text.length });
         
         // Fix common concatenated words (add space between lowercase and uppercase)
         text = text.replace(/([a-z])([A-Z])/g, '$1 $2');
@@ -556,6 +565,13 @@ const DocumentParser = {
         
         // Clean up excessive line breaks (max 2)
         text = text.replace(/\n{3,}/g, '\n\n');
+        
+        Utils.debug.log('smartFormatCleanup AFTER:', {
+            length: text.length,
+            firstChars: text.substring(0, 200),
+            hasEncoding: text.includes('ð'),
+            hasConcatenations: text.includes('separationanxiety') || text.includes('majorattachment')
+        });
         
         return text;
     }
