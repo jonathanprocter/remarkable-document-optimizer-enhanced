@@ -488,6 +488,19 @@ const DocumentParser = {
         // Fix "there'sa" and similar contractions
         text = text.replace(/(\w+)'s([a-z])/g, "$1's $2");
         
+        // AGGRESSIVE FIX: Remove spaces within words (e.g., "T o Psy C ho T hera P y" -> "ToPsychoTherapy")
+        // Pattern: Single letter + space + single letter (repeated)
+        // This fixes academic texts with severe character spacing issues
+        text = text.replace(/\b([A-Z]) ([a-z])\b/g, '$1$2'); // "T o" -> "To"
+        text = text.replace(/\b([a-z]) ([A-Z])\b/g, '$1$2'); // "o F" -> "oF"
+        text = text.replace(/\b([A-Z]) ([A-Z])\b/g, '$1$2'); // "T T" -> "TT"
+        text = text.replace(/\b([a-z]) ([a-z])\b/g, '$1$2'); // "e d" -> "ed"
+        
+        // Multi-pass: Remove single-letter spaces (up to 5 passes for nested patterns)
+        for (let i = 0; i < 5; i++) {
+            text = text.replace(/([a-zA-Z]) ([a-zA-Z])/g, '$1$2');
+        }
+        
         // Fix common concatenated words (add space between lowercase and uppercase)
         text = text.replace(/([a-z])([A-Z])/g, '$1 $2');
         
