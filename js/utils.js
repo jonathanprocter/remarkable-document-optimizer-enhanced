@@ -152,13 +152,14 @@ const Utils = {
 
     /**
      * Sanitize text for PDF generation
+     * FIXED: Preserve ALL newlines - no reduction
      */
     sanitizeText: function(text) {
         if (!text) return '';
         return text
             .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F-\u009F]/g, '') // Remove control characters EXCEPT \n (\u000A) and \r (\u000D)
             .replace(/[^\S\n]+/g, ' ') // Normalize spaces and tabs, but PRESERVE newlines
-            .replace(/\n{3,}/g, '\n\n') // Limit consecutive newlines to 2
+            // REMOVED: .replace(/\n{3,}/g, '\n\n') - preserve original blank line count
             .trim();
     },
 

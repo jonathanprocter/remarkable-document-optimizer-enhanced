@@ -202,7 +202,6 @@ const PDFOptimizer = {
         let currentPage = 1;
         let linesOnPage = 0;
         const lineHeight = options.fontSize * 1.4; // IMPROVED: Better spacing for e-ink
-        const paragraphSpacing = lineHeight * 0.5; // Extra space between paragraphs (half a line)
 
         Utils.debug.log('Starting text rendering', {
             startY: currentY,
@@ -219,10 +218,11 @@ const PDFOptimizer = {
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
 
-            // Handle empty lines (paragraph breaks) - but don't add extra space at page top
+            // FIXED: Empty lines get normal lineHeight - no extra spacing
+            // This preserves original document spacing exactly
             if (!line || line.trim().length === 0) {
                 if (currentY > marginY) { // Only add space if not at top of page
-                    currentY += paragraphSpacing;
+                    currentY += lineHeight; // Same as regular line
                 }
                 continue;
             }

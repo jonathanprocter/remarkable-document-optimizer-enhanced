@@ -80,12 +80,18 @@ const DocumentParser = {
         // Extract text and images from each page
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
             const page = await pdf.getPage(pageNum);
-            
+
             // Extract text
             const pageText = await this.extractTextFromPage(page);
-            fullText += pageText + '\n\n';
+            // FIXED: Don't auto-add breaks between pages - preserve original flow
+            fullText += pageText;
 
-            Utils.debug.log(`Page ${pageNum} extracted`, { 
+            // Only add separator if not last page and text doesn't already end with newline
+            if (pageNum < pdf.numPages && !pageText.endsWith('\n')) {
+                fullText += '\n';
+            }
+
+            Utils.debug.log(`Page ${pageNum} extracted`, {
                 textLength: pageText.length,
                 hasContent: !!pageText,
                 imageCount: 0
@@ -159,55 +165,43 @@ const DocumentParser = {
             }
             
             // Add spacing if needed (not at line start)
-            const itemStr = item.str.trim();
-            if (itemStr) {
-                // FIXED: Much more robust space detection
-                const needsSpace = text.length > 0 && 
-                                   !text.endsWith('\n') && 
+            // FIXED: Don't trim - preserve original spacing from PDF
+            const itemStr = item.str;
+            if (itemStr && itemStr.trim()) {  // Only skip if completely empty
+                // Space detection based on PDF positioning, not assumptions
+                const needsSpace = text.length > 0 &&
+                                   !text.endsWith('\n') &&
                                    !text.endsWith(' ');
-                
-                // Check multiple conditions for space (use OR logic, not else-if):
+
                 if (needsSpace) {
                     let shouldAddSpace = false;
-                    
-                    // 1. Item explicitly has leading/trailing whitespace
-                    if (item.str.startsWith(' ') || (lastItem && lastItem.str.endsWith(' '))) {
+
+                    // 1. Item explicitly has leading whitespace
+                    if (itemStr.startsWith(' ')) {
                         shouldAddSpace = true;
                     }
-                    // 2. Previous item has hasEOL flag (PDF.js indicator for whitespace)
+                    // 2. Previous item explicitly has trailing whitespace
+                    else if (lastItem && lastItem.str.endsWith(' ')) {
+                        shouldAddSpace = true;
+                    }
+                    // 3. Previous item has hasEOL flag (PDF.js indicator)
                     else if (lastItem && lastItem.hasEOL) {
                         shouldAddSpace = true;
                     }
-                    // 3. Check horizontal gap between items
+                    // 4. Check horizontal gap between items (only if significant)
                     else if (lastX !== null && lastItem) {
-                        // Calculate the gap between end of last item and start of current item
                         const gap = x - lastX;
-                        // Use a small threshold (2 pixels) to detect word boundaries
-                        if (gap > 2) {
+                        // Conservative threshold - only if gap is clearly a word boundary
+                        if (gap > 3) {
                             shouldAddSpace = true;
                         }
                     }
-                    
-                    // 4. FALLBACK: Always add space between alphanumeric characters
-                    // This is the most important fix - ensures words are always separated
-                    if (!shouldAddSpace && text.length > 0 && !text.endsWith('-')) {
-                        const lastChar = text[text.length - 1];
-                        const firstChar = itemStr[0];
-                        // Add space if transitioning between alphanumeric characters
-                        if (/[a-zA-Z0-9]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar)) {
-                            shouldAddSpace = true;
-                        }
-                        // Also add space after punctuation that typically needs it
-                        else if (/[,;:\)\]\}\.!?]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar)) {
-                            shouldAddSpace = true;
-                        }
-                    }
-                    
+
                     if (shouldAddSpace) {
                         text += ' ';
                     }
                 }
-                
+
                 text += itemStr;
                 lastItem = item;
             }
@@ -426,9 +420,7 @@ const DocumentParser = {
         // Fix common encoding errors that are clearly corruption
         text = text.replace(/\bPEAKERS\b/g, 'SPEAKERS'); // Common OCR error
 
-        // Clean up excessive blank lines (more than 2 in a row)
-        // This is the ONLY structural change - collapse 3+ blank lines to 2
-        text = text.replace(/\n{4,}/g, '\n\n\n');
+        // REMOVED: Newline reduction - preserve ALL blank lines exactly as they are
 
         Utils.debug.log('smartFormatCleanup complete - layout preserved', {
             length: text.length
