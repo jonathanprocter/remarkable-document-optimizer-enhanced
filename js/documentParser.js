@@ -154,8 +154,8 @@ const DocumentParser = {
     },
 
     /**
-     * Extract text from a PDF page with proper spacing - NEW APPROACH
-     * Focus on accurate extraction using PDF.js positioning data
+     * Extract text from a PDF page - FIXED for proper line detection
+     * Uses larger thresholds to avoid breaking lines unnecessarily
      */
     async extractTextFromPage(page) {
         const textContent = await page.getTextContent();
@@ -183,10 +183,11 @@ const DocumentParser = {
                 const verticalDiff = Math.abs(y - lastY);
                 const avgFontSize = (fontSize + (lastFontSize || fontSize)) / 2;
 
-                // New line if vertical position changed by more than 30% of font size
-                if (verticalDiff > avgFontSize * 0.3) {
-                    // Paragraph break for larger gaps (1.5x font size)
-                    if (verticalDiff > avgFontSize * 1.5) {
+                // FIXED: Use much larger threshold to avoid breaking within same line
+                // Only add line break if vertical gap is > 80% of font size (was 30%)
+                if (verticalDiff > avgFontSize * 0.8) {
+                    // Paragraph break for much larger gaps (2.5x font size, was 1.5x)
+                    if (verticalDiff > avgFontSize * 2.5) {
                         text += '\n\n';
                     } else {
                         text += '\n';
@@ -199,8 +200,9 @@ const DocumentParser = {
             if (lastX !== null && !text.endsWith('\n') && !text.endsWith(' ')) {
                 const horizontalGap = x - lastX;
 
+                // FIXED: More generous spacing threshold
                 // Space if gap is larger than typical character width
-                if (horizontalGap > fontSize * 0.15) {
+                if (horizontalGap > fontSize * 0.2) {
                     text += ' ';
                 }
             }
