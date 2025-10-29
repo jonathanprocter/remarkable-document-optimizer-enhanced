@@ -439,11 +439,23 @@ const DocumentParser = {
      * This preserves numbered lists, headings, and paragraph breaks
      */
     smartFormatCleanup(text) {
+        // Fix encoding issues - replace ðý with proper bullet
+        text = text.replace(/ðý/g, '• ');
+        
+        // Add line breaks after question marks before numbers
+        text = text.replace(/\?(\d+\.)/g, '?\n$1');
+        
+        // Add line breaks in number sequences like "1-2-3-4-5"
+        text = text.replace(/(\d)-(\d)-(\d)/g, '$1\n$2\n$3');
+        
+        // Fix table of contents - add line breaks before page numbers at start
+        text = text.replace(/^(\d+)(\d+)(\d+)/m, '$1\n$2\n$3\n');
+        
         // Add line breaks before numbered items (1., 2., 3. or 1), 2), 3))
         text = text.replace(/(\S)(\d+[\.\)])\s+/g, '$1\n$2 ');
         
-        // Add line breaks before bullet points
-        text = text.replace(/(\S)([•\-\*○▪])\s+/g, '$1\n$2 ');
+        // Add line breaks before bullet points and checkboxes
+        text = text.replace(/(\S)([•\-\*○▪☐☑])\s*/g, '$1\n$2 ');
         
         // Add line breaks before common question patterns
         text = text.replace(/(\S)(Question\s+\d+)/gi, '$1\n\n$2');
@@ -453,7 +465,13 @@ const DocumentParser = {
         text = text.replace(/(\S)([A-Z][A-Z\s]{2,78}[A-Z])(?=[a-z]|\d)/g, '$1\n\n$2\n\n');
         
         // Add line breaks before common section headers
-        text = text.replace(/(\S)(Contents|Introduction|Summary|Conclusion|References|Appendix):/gi, '$1\n\n$2:');
+        text = text.replace(/(\S)(Contents|Introduction|Summary|Conclusion|References|Appendix|Self-Assessment|Symptoms|Triggers|Management):/gi, '$1\n\n$2:\n');
+        
+        // Add line breaks before "Statement Rate" pattern
+        text = text.replace(/(\S)(Statement\s+Rate)/gi, '$1\n\n$2');
+        
+        // Add line breaks before score patterns
+        text = text.replace(/(\S)(Score:)/gi, '$1\n\n$2');
         
         // Clean up excessive line breaks (max 2)
         text = text.replace(/\n{3,}/g, '\n\n');
