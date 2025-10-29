@@ -103,10 +103,10 @@ const DocumentParser = {
 
         Utils.debug.log('Text extraction complete: ' + fullText.length + ' characters from ' + pdf.numPages + ' pages');
         Utils.debug.log('Image extraction complete: ' + images.length + ' images found');
-        
-        // Apply smart formatting cleanup
-        fullText = this.smartFormatCleanup(fullText);
-        Utils.debug.log('Smart formatting applied');
+
+        // TEMPORARILY DISABLED - testing if this is where text gets destroyed
+        // fullText = this.smartFormatCleanup(fullText);
+        Utils.debug.log('smartFormatCleanup SKIPPED - using raw extracted text');
 
         Utils.debug.success('PDF parsing complete', { 
             totalPages: pdf.numPages,
@@ -124,126 +124,52 @@ const DocumentParser = {
     },
 
     /**
-     * Extract text from a PDF page with proper spacing
+     * Extract text from a PDF page - SIMPLIFIED to preserve original layout
      */
     async extractTextFromPage(page) {
         const textContent = await page.getTextContent();
-        let text = '';
-        let lastItem = null;
-        let lastX = null;
-        let lastY = null;
-        let lastHeight = null;
+        const items = textContent.items;
 
-        for (const item of textContent.items) {
+        // Sort items by position (top to bottom, left to right)
+        items.sort((a, b) => {
+            const yDiff = b.transform[5] - a.transform[5]; // Y position (inverted in PDF)
+            if (Math.abs(yDiff) > 5) return yDiff; // Different lines
+            return a.transform[4] - b.transform[4]; // Same line, sort by X
+        });
+
+        let text = '';
+        let lastY = null;
+        let lastX = null;
+
+        for (const item of items) {
             if (!item.str) continue;
 
-            const { transform, str, width, height } = item;
-            const x = transform[4];
-            const y = transform[5];
+            const x = item.transform[4];
+            const y = item.transform[5];
+            const str = item.str;
 
-            // FIXED: Line break detection with correct priority
-            if (lastY !== null) {
-                const verticalGap = Math.abs(y - lastY);
-                const lineHeight = lastHeight || 10;
-
-                // Check for paragraph breaks FIRST (larger gaps)
-                if (verticalGap > lineHeight * 1.5) {
-                    // Large gap = paragraph break
-                    if (text && !text.endsWith('\n\n')) {
-                        text += '\n\n';
-                    }
-                }
-                // Then check for regular line breaks (medium gaps)
-                else if (verticalGap > lineHeight * 0.5) {
-                    // Medium gap = line break
-                    if (text && !text.endsWith('\n')) {
-                        text += '\n';
-                    }
-                }
-                // Small or no gap = same line, continue
+            // Detect line breaks by Y position change
+            if (lastY !== null && Math.abs(y - lastY) > 5) {
+                text += '\n';
             }
-            
-            // Add spacing if needed (not at line start)
-            const itemStr = item.str.trim();  // Normalize the text
-            if (itemStr) {
-                // Space detection - check PDF's intent via original item.str
-                const needsSpace = text.length > 0 &&
-                                   !text.endsWith('\n') &&
-                                   !text.endsWith(' ');
-
-                if (needsSpace) {
-                    let shouldAddSpace = false;
-
-                    // 1. PDF explicitly has leading/trailing spaces
-                    if (item.str.startsWith(' ') || (lastItem && lastItem.str.endsWith(' '))) {
-                        shouldAddSpace = true;
-                    }
-                    // 2. Previous item has hasEOL flag (PDF.js indicator)
-                    else if (lastItem && lastItem.hasEOL) {
-                        shouldAddSpace = true;
-                    }
-                    // 3. Check horizontal gap between items
-                    else if (lastX !== null && lastItem) {
-                        const gap = x - lastX;
-                        // Use 2px threshold (most PDFs use 2-4px for word spacing)
-                        if (gap > 2) {
-                            shouldAddSpace = true;
-                        }
-                    }
-
-                    // 4. CRITICAL FALLBACK: Ensure words don't concatenate
-                    // This catches cases where PDF doesn't encode spacing properly
-                    if (!shouldAddSpace && text.length > 0) {
-                        const lastChar = text[text.length - 1];
-                        const firstChar = itemStr[0];
-
-                        // Add space between separate words
-                        if (/[a-zA-Z0-9]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar)) {
-                            shouldAddSpace = true;
-                        }
-                        // Add space after punctuation before letters/numbers
-                        else if (/[,;:\)\]\}\.!?]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar)) {
-                            shouldAddSpace = true;
-                        }
-                    }
-
-                    if (shouldAddSpace) {
-                        text += ' ';
-                    }
-                }
-
-                text += itemStr;
-                lastItem = item;
+            // Detect word spacing by X gap
+            else if (lastX !== null && (x - lastX) > 5) {
+                text += ' ';
             }
-            
+
+            text += str;
             lastY = y;
             lastX = x + (item.width || 0);
-            lastHeight = height;
         }
-        
-        // FIX: Aggressively reconstruct broken words from Type 3 fonts
-        text = this.fixBrokenWords(text);
-        
+
         return text.trim();
     },
 
     /**
-     * DISABLED: Fix broken words (too aggressive, destroys normal text)
-     * Only keep the most conservative ligature fixes
+     * COMPLETELY DISABLED - causes more problems than it solves
      */
     fixBrokenWords(text) {
-        // ONLY fix obvious ligature splits that are clearly broken
-        // These are very specific patterns that rarely occur in normal text
-
-        // Fix common ligature splits: "f i" -> "fi", "f l" -> "fl"
-        // Use word boundaries and be very conservative
-        text = text.replace(/\bf\s+i\b/g, 'fi');
-        text = text.replace(/\bf\s+l\b/g, 'fl');
-        text = text.replace(/\bf\s+f\b/g, 'ff');
-
-        // DO NOT do aggressive single-letter merging - it destroys normal text
-        // like "a new" becoming "anew"
-
+        // DO NOTHING - return text unchanged
         return text;
     },
 
