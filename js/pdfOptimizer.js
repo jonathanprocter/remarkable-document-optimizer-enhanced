@@ -181,7 +181,7 @@ const PDFOptimizer = {
         let currentY = marginY;
         let currentPage = 1;
         let linesOnPage = 0;
-        const lineHeight = options.fontSize * 0.4;
+        const lineHeight = options.fontSize * 1.2; // FIXED: Proper line spacing for readability
 
         Utils.debug.log('Starting text rendering', { 
             startY: currentY, 
@@ -478,7 +478,7 @@ const PDFOptimizer = {
     },
 
     /**
-     * Wrap text to lines with proper word boundaries
+     * Wrap text to lines with proper word boundaries - PRESERVES ORIGINAL LINE BREAKS
      */
     wrapTextToLines: function(pdf, text, maxWidth, fontSize) {
         Utils.debug.log('Wrapping text to lines', {
@@ -486,44 +486,60 @@ const PDFOptimizer = {
             maxWidth: maxWidth
         });
 
-        // Split into paragraphs first
-        const paragraphs = text.split(/\n\n+/);
+        // CRITICAL FIX: Preserve ALL line breaks from original document
+        // Split by single newlines first to preserve original line structure
+        const originalLines = text.split('\n');
         const allLines = [];
 
-        for (const paragraph of paragraphs) {
-            if (!paragraph.trim()) {
+        for (const originalLine of originalLines) {
+            // Empty line - preserve it
+            if (!originalLine.trim()) {
                 allLines.push('');
                 continue;
             }
 
-            // Split paragraph into words
-            const words = paragraph.trim().split(/\s+/);
-            let currentLine = '';
+            // Check if line fits within page width
+            const lineWidth = pdf.getTextWidth(originalLine);
 
-            for (const word of words) {
-                const testLine = currentLine ? `${currentLine} ${word}` : word;
-                const lineWidth = pdf.getTextWidth(testLine);
+            if (lineWidth <= maxWidth) {
+                // Line fits - keep it as is (PRESERVE ORIGINAL LAYOUT)
+                allLines.push(originalLine);
+            } else {
+                // Line is too long - need to wrap it
+                // Split into words and wrap
+                const words = originalLine.trim().split(/\s+/);
+                let currentLine = '';
 
-                if (lineWidth <= maxWidth) {
-                    currentLine = testLine;
-                } else {
-                    if (currentLine) {
-                        allLines.push(currentLine);
-                        currentLine = word;
+                for (const word of words) {
+                    const testLine = currentLine ? `${currentLine} ${word}` : word;
+                    const testWidth = pdf.getTextWidth(testLine);
+
+                    if (testWidth <= maxWidth) {
+                        currentLine = testLine;
                     } else {
-                        // Single word is too long
-                        const brokenWords = this.breakLongWord(pdf, word, maxWidth);
-                        allLines.push(...brokenWords.slice(0, -1));
-                        currentLine = brokenWords[brokenWords.length - 1];
+                        if (currentLine) {
+                            allLines.push(currentLine);
+                            currentLine = word;
+                        } else {
+                            // Single word is too long - break it
+                            const brokenWords = this.breakLongWord(pdf, word, maxWidth);
+                            allLines.push(...brokenWords.slice(0, -1));
+                            currentLine = brokenWords[brokenWords.length - 1];
+                        }
                     }
                 }
-            }
 
-            if (currentLine) {
-                allLines.push(currentLine);
+                if (currentLine) {
+                    allLines.push(currentLine);
+                }
             }
-            allLines.push('');
         }
+
+        Utils.debug.log('Line wrapping complete', {
+            originalLineCount: originalLines.length,
+            wrappedLineCount: allLines.length,
+            preservedStructure: true
+        });
 
         return allLines;
     },
