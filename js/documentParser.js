@@ -252,35 +252,79 @@ const DocumentParser = {
     },
 
     /**
-     * Assess text quality to determine if OCR should be used
+     * Assess text quality - IMPROVED to detect font encoding issues
      */
     assessTextQuality(text, pageCount) {
         const avgCharsPerPage = text.length / pageCount;
         const words = text.split(/\s+/).filter(w => w.length > 0);
         const avgWordLength = words.reduce((sum, w) => sum + w.length, 0) / (words.length || 1);
 
-        // Calculate suspicious patterns
-        const suspiciousChars = (text.match(/[����������]/g) || []).length;
+        // IMPROVED: Detect various types of corruption
+        const suspiciousPatterns = [
+            /[����������]/g,           // Original pattern
+            /[\u0600-\u06FF]/g,         // Arabic characters (shouldn't be in English docs)
+            /[\u4E00-\u9FFF]/g,         // Chinese characters
+            /[^\x00-\x7F\u00A0-\u00FF\u2000-\u206F\u2070-\u209F\u20A0-\u20CF\u2100-\u214F]/g, // Non-standard Unicode
+        ];
+
+        let suspiciousChars = 0;
+        for (const pattern of suspiciousPatterns) {
+            const matches = text.match(pattern);
+            if (matches) suspiciousChars += matches.length;
+        }
         const suspiciousRatio = suspiciousChars / (text.length || 1);
 
-        // Check for excessive single-character words (might indicate broken text)
+        // Check for excessive single-character words
         const singleCharWords = words.filter(w => w.length === 1).length;
         const singleCharRatio = singleCharWords / (words.length || 1);
 
+        // NEW: Check for garbled words (consonant-heavy, no vowels)
+        const garbledWords = words.filter(w => {
+            if (w.length < 4) return false;
+            const vowels = w.match(/[aeiouAEIOU]/g) || [];
+            return vowels.length === 0; // No vowels = likely garbled
+        }).length;
+        const garbledRatio = garbledWords / (words.length || 1);
+
+        // NEW: Check for words with numbers mixed in
+        const mixedAlphaNum = words.filter(w =>
+            /[a-zA-Z]/.test(w) && /\d/.test(w) && w.length > 3
+        ).length;
+        const mixedRatio = mixedAlphaNum / (words.length || 1);
+
         const shouldUseOCR =
             avgCharsPerPage < 50 ||             // Too few characters (likely scanned)
-            suspiciousRatio > 0.05 ||           // Too many encoding issues
+            suspiciousRatio > 0.02 ||           // LOWERED: Even 2% corruption is bad (was 5%)
             singleCharRatio > 0.3 ||            // Too many single-char words
-            avgWordLength < 2;                  // Words too short (broken)
+            avgWordLength < 2 ||                // Words too short (broken)
+            garbledRatio > 0.05 ||              // NEW: 5% garbled words
+            mixedRatio > 0.03;                  // NEW: 3% words with mixed alpha-numeric
 
         return {
             avgCharsPerPage,
             avgWordLength,
             suspiciousRatio,
             singleCharRatio,
+            garbledRatio,
+            mixedRatio,
             shouldUseOCR,
-            quality: shouldUseOCR ? 'poor' : 'good'
+            quality: shouldUseOCR ? 'poor' : 'good',
+            reason: shouldUseOCR ? this.getQualityReason(avgCharsPerPage, suspiciousRatio, singleCharRatio, garbledRatio, mixedRatio, avgWordLength) : null
         };
+    },
+
+    /**
+     * Get human-readable reason for poor quality
+     */
+    getQualityReason(avgChars, suspicious, singleChar, garbled, mixed, avgWord) {
+        const reasons = [];
+        if (avgChars < 50) reasons.push('too few characters per page');
+        if (suspicious > 0.02) reasons.push(`${(suspicious * 100).toFixed(1)}% corrupted characters`);
+        if (singleChar > 0.3) reasons.push('too many single-letter words');
+        if (garbled > 0.05) reasons.push(`${(garbled * 100).toFixed(1)}% garbled words`);
+        if (mixed > 0.03) reasons.push('mixed alphanumeric corruption');
+        if (avgWord < 2) reasons.push('words too short');
+        return reasons.join(', ');
     },
 
     /**
