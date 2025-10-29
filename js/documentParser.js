@@ -465,9 +465,25 @@ const DocumentParser = {
         // Fix "PEAKERS" -> "SPEAKERS" (common OCR error)
         text = text.replace(/\bPEAKERS\b/g, 'SPEAKERS');
         
-        // Fix missing first letter in names (e.g., "onathan" -> "Jonathan")
+        // Fix major encoding issues
+        text = text.replace(/è\s*UPLE/g, 'COUPLE');
+        text = text.replace(/ðNTERVENTð/g, 'INTERVENTION');
+        text = text.replace(/è/g, 'C');
+        text = text.replace(/ð/g, 'I');
+        
+        // Fix garbled text patterns
+        text = text.replace(/C[çç]muni[àá]A[óò]icSk[ïî][ãä]×s/g, 'Communication Skills');
+        text = text.replace(/[çç]muni[àá]A[óò]ic/g, 'Communication');
+        
+        // Fix missing first letters at word boundaries
         text = text.replace(/\bonathan\b/g, 'Jonathan');
         text = text.replace(/\nebecca\b/g, 'Rebecca');
+        text = text.replace(/\bommunication\b/g, 'Communication');
+        text = text.replace(/\bnger\b/g, 'Anger');
+        text = text.replace(/\belationship\b/g, 'Relationship');
+        text = text.replace(/\bctive\b/g, 'Active');
+        text = text.replace(/\bxercise/g, 'Exercise');
+        text = text.replace(/\bttachment\b/g, 'Attachment');
         
         // Fix "there'sa" and similar contractions
         text = text.replace(/(\w+)'s([a-z])/g, "$1's $2");
