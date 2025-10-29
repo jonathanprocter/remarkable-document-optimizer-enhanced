@@ -154,8 +154,8 @@ const DocumentParser = {
     },
 
     /**
-     * Extract text from a PDF page - FIXED for proper line detection
-     * Uses larger thresholds to avoid breaking lines unnecessarily
+     * Extract text from a PDF page - FIXED for proper reading order
+     * Groups items by line (Y-position) before building text
      */
     async extractTextFromPage(page) {
         const textContent = await page.getTextContent();
@@ -163,57 +163,89 @@ const DocumentParser = {
 
         if (items.length === 0) return '';
 
-        let text = '';
-        let lastY = null;
-        let lastX = null;
-        let lastFontSize = null;
+        // Group items by their vertical position (line)
+        const lines = [];
+        const lineThreshold = 5; // Items within 5pt vertically are on same line
 
-        for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-
+        for (const item of items) {
             if (!item.str || !item.transform) continue;
 
-            const currentStr = item.str;
             const x = item.transform[4];
             const y = item.transform[5];
             const fontSize = Math.abs(item.transform[3]);
 
-            // Detect new lines based on vertical position change
-            if (lastY !== null) {
-                const verticalDiff = Math.abs(y - lastY);
-                const avgFontSize = (fontSize + (lastFontSize || fontSize)) / 2;
+            // Find existing line or create new one
+            let foundLine = null;
+            for (const line of lines) {
+                if (Math.abs(line.y - y) <= lineThreshold) {
+                    foundLine = line;
+                    break;
+                }
+            }
 
-                // FIXED: Use much larger threshold to avoid breaking within same line
-                // Only add line break if vertical gap is > 80% of font size (was 30%)
-                if (verticalDiff > avgFontSize * 0.8) {
-                    // Paragraph break for much larger gaps (2.5x font size, was 1.5x)
-                    if (verticalDiff > avgFontSize * 2.5) {
-                        text += '\n\n';
-                    } else {
-                        text += '\n';
+            if (foundLine) {
+                foundLine.items.push({ x, y, str: item.str, fontSize, width: item.width });
+            } else {
+                lines.push({
+                    y: y,
+                    items: [{ x, y, str: item.str, fontSize, width: item.width }]
+                });
+            }
+        }
+
+        // Sort lines by Y-position (top to bottom, accounting for PDF coordinate system)
+        lines.sort((a, b) => b.y - a.y);
+
+        // Within each line, sort items by X-position (left to right)
+        for (const line of lines) {
+            line.items.sort((a, b) => a.x - b.x);
+        }
+
+        // Build text from sorted lines
+        let text = '';
+        let lastY = null;
+        let lastFontSize = null;
+
+        for (const line of lines) {
+            // Determine spacing before this line
+            if (lastY !== null && line.items.length > 0) {
+                const verticalGap = Math.abs(lastY - line.y);
+                const avgFontSize = (line.items[0].fontSize + (lastFontSize || line.items[0].fontSize)) / 2;
+
+                // Paragraph break for large gaps
+                if (verticalGap > avgFontSize * 2.5) {
+                    text += '\n\n';
+                } else if (verticalGap > avgFontSize * 0.8) {
+                    text += '\n';
+                } else {
+                    // Items are very close vertically, might be same line
+                    if (text && !text.endsWith(' ') && !text.endsWith('\n')) {
+                        text += ' ';
                     }
-                    lastX = null; // Reset horizontal tracking
                 }
             }
 
-            // Add horizontal spacing based on gap between items
-            if (lastX !== null && !text.endsWith('\n') && !text.endsWith(' ')) {
-                const horizontalGap = x - lastX;
+            // Add items from this line
+            let lastX = null;
+            for (const item of line.items) {
+                // Add horizontal spacing between items on same line
+                if (lastX !== null) {
+                    const horizontalGap = item.x - lastX;
+                    const avgFontSize = item.fontSize;
 
-                // FIXED: More generous spacing threshold
-                // Space if gap is larger than typical character width
-                if (horizontalGap > fontSize * 0.2) {
-                    text += ' ';
+                    if (horizontalGap > avgFontSize * 0.3) {
+                        text += ' ';
+                    }
                 }
+
+                text += item.str;
+                lastX = item.x + item.width;
             }
 
-            // Add the text
-            text += currentStr;
-
-            // Update tracking variables
-            lastY = y;
-            lastX = x + item.width;
-            lastFontSize = fontSize;
+            lastY = line.y;
+            if (line.items.length > 0) {
+                lastFontSize = line.items[0].fontSize;
+            }
         }
 
         return text.trim();
