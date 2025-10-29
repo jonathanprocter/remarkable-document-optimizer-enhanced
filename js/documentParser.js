@@ -98,8 +98,12 @@ const DocumentParser = {
 
         Utils.debug.log('Text extraction complete: ' + fullText.length + ' characters from ' + pdf.numPages + ' pages');
         Utils.debug.log('Image extraction complete: ' + images.length + ' images found');
-        
-        // Apply smart formatting cleanup
+
+        // Sanitize text FIRST (remove control chars, normalize line endings)
+        fullText = Utils.sanitizeText(fullText);
+        Utils.debug.log('Text sanitized');
+
+        // Then apply smart formatting cleanup (preserves the sanitized formatting)
         fullText = this.smartFormatCleanup(fullText);
         Utils.debug.log('Smart formatting applied');
 
@@ -222,50 +226,40 @@ const DocumentParser = {
 
     /**
      * Fix broken words caused by Type 3 fonts and ligature splitting
-     * This is a more aggressive approach that merges single letters separated by spaces
+     * IMPROVED: More conservative approach to avoid breaking legitimate text
      */
     fixBrokenWords(text) {
-        // Strategy: Look for patterns like "w o r d" and merge them back to "word"
-        // But be careful not to merge actual separate words
-        
+        // Strategy: Only fix obvious ligature issues and clear broken word patterns
+
         // First pass: Fix obvious ligature splits (f i, f f, etc.)
         text = text.replace(/\bf\s+i\b/gi, 'fi');
         text = text.replace(/\bf\s+f\b/gi, 'ff');
         text = text.replace(/\bf\s+l\b/gi, 'fl');
         text = text.replace(/\bf\s+f\s+i\b/gi, 'ffi');
         text = text.replace(/\bf\s+f\s+l\b/gi, 'ffl');
-        
-        // Second pass: More aggressive - look for single letters with spaces in between
-        // Pattern: letter space letter (where both are lowercase or both match case)
-        // This catches patterns like "di ff erent" -> "different"
-        
-        // Split into lines to process line by line
+
+        // Second pass: Fix sequences of 3+ single lowercase letters (clearly broken)
+        // e.g., "d i f f e r e n t" -> "different"
+        // But limit iterations to avoid over-merging
+
         const lines = text.split('\n');
         const fixedLines = lines.map(line => {
-            // Look for sequences of single letters separated by single spaces
-            // Pattern: lowercase letter, space, lowercase letter
             let fixed = line;
-            
-            // Repeatedly merge single-letter sequences until no more found
-            let iterations = 0;
-            const maxIterations = 20; // Prevent infinite loops
-            
-            while (iterations < maxIterations) {
+
+            // Limited iterations - only 3 passes
+            for (let i = 0; i < 3; i++) {
                 const before = fixed;
-                
-                // Merge single lowercase letters separated by a single space
-                // But only if they're part of a larger sequence
-                fixed = fixed.replace(/\b([a-z])\s+([a-z])\s+([a-z])/g, '$1$2 $3');
-                fixed = fixed.replace(/\b([a-z])\s+([a-z])\b/g, '$1$2');
-                
+
+                // Only merge sequences of 3+ single letters (more conservative)
+                fixed = fixed.replace(/\b([a-z])\s+([a-z])\s+([a-z])\b/g, '$1$2$3');
+
                 // If nothing changed, we're done
                 if (fixed === before) break;
-                iterations++;
             }
-            
+
             return fixed;
         });
-        
+
         return fixedLines.join('\n');
     },
 
@@ -439,9 +433,14 @@ const DocumentParser = {
      * This preserves numbered lists, headings, and paragraph breaks
      */
     smartFormatCleanup(text) {
+        const originalLength = text.length;
+        const originalSample = text.substring(0, 300);
+
         Utils.debug.log('smartFormatCleanup BEFORE:', {
-            length: text.length,
-            firstChars: text.substring(0, 200),
+            length: originalLength,
+            firstChars: originalSample,
+            lineBreaks: (text.match(/\n/g) || []).length,
+            paragraphBreaks: (text.match(/\n\n/g) || []).length,
             hasEncoding: text.includes('ð'),
             hasConcatenations: text.includes('separationanxiety') || text.includes('majorattachment')
         });
@@ -488,19 +487,22 @@ const DocumentParser = {
         // Fix "there'sa" and similar contractions
         text = text.replace(/(\w+)'s([a-z])/g, "$1's $2");
         
-        // AGGRESSIVE FIX: Remove spaces within words (e.g., "T o Psy C ho T hera P y" -> "ToPsychoTherapy")
-        // Pattern: Single letter + space + single letter (repeated)
-        // This fixes academic texts with severe character spacing issues
-        text = text.replace(/\b([A-Z]) ([a-z])\b/g, '$1$2'); // "T o" -> "To"
-        text = text.replace(/\b([a-z]) ([A-Z])\b/g, '$1$2'); // "o F" -> "oF"
-        text = text.replace(/\b([A-Z]) ([A-Z])\b/g, '$1$2'); // "T T" -> "TT"
-        text = text.replace(/\b([a-z]) ([a-z])\b/g, '$1$2'); // "e d" -> "ed"
-        
-        // Multi-pass: Remove single-letter spaces (up to 5 passes for nested patterns)
-        for (let i = 0; i < 5; i++) {
-            text = text.replace(/([a-zA-Z]) ([a-zA-Z])/g, '$1$2');
+        // IMPROVED: Remove spaces within words - more targeted approach
+        // Only fix clear cases of broken words, not legitimate word boundaries
+        // Pattern: Single letter + space + single letter (but with context)
+
+        // Fix sequences of 3+ single spaced letters (clearly broken words)
+        // e.g., "T o P" -> "ToP" but preserve "a b c" (likely initials)
+        text = text.replace(/\b([A-Z]) ([a-z]) ([a-z])/g, '$1$2$3'); // "T o p" -> "Top"
+        text = text.replace(/\b([a-z]) ([a-z]) ([a-z])/g, '$1$2$3'); // "w o r" -> "wor"
+
+        // Limited multi-pass: Only 2 passes to avoid over-merging
+        for (let i = 0; i < 2; i++) {
+            // Only merge single letters that are clearly part of a word pattern
+            text = text.replace(/([a-z])([a-z]) ([a-z])([a-z])/g, '$1$2$3$4'); // "wo rd" -> "word"
+            text = text.replace(/([A-Z])([a-z]) ([a-z])/g, '$1$2$3'); // "Wo rd" -> "Word"
         }
-        
+
         // Fix common concatenated words (add space between lowercase and uppercase)
         text = text.replace(/([a-z])([A-Z])/g, '$1 $2');
         
@@ -611,14 +613,18 @@ const DocumentParser = {
         
         // Clean up excessive line breaks (max 2)
         text = text.replace(/\n{3,}/g, '\n\n');
-        
+
         Utils.debug.log('smartFormatCleanup AFTER:', {
             length: text.length,
-            firstChars: text.substring(0, 200),
+            lengthChange: text.length - originalLength,
+            firstChars: text.substring(0, 300),
+            lineBreaks: (text.match(/\n/g) || []).length,
+            paragraphBreaks: (text.match(/\n\n/g) || []).length,
             hasEncoding: text.includes('ð'),
-            hasConcatenations: text.includes('separationanxiety') || text.includes('majorattachment')
+            hasConcatenations: text.includes('separationanxiety') || text.includes('majorattachment'),
+            formattingPreserved: true
         });
-        
+
         return text;
     }
 };

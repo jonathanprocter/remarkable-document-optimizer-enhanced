@@ -154,14 +154,14 @@ const PDFOptimizer = {
         // CRITICAL CHECK: Verify we have actual text
         if (!contentText || contentText.trim().length === 0) {
             Utils.debug.error('CRITICAL: Content text is empty after extraction');
-            
+
             // Fallback: Try to extract from pages if available
             if (parsedDocument.pages && parsedDocument.pages.length > 0) {
                 Utils.debug.log('Attempting to extract from pages array');
                 contentText = parsedDocument.pages.map(p => p.text).join('\n\n');
                 Utils.debug.log('Extracted from pages', { textLength: contentText.length });
             }
-            
+
             // Final check
             if (!contentText || contentText.trim().length === 0) {
                 Utils.debug.error('CRITICAL: Still no content after fallback attempts');
@@ -169,9 +169,9 @@ const PDFOptimizer = {
             }
         }
 
-        // Sanitize text
-        contentText = Utils.sanitizeText(contentText);
-        Utils.debug.log('Text sanitized', { finalLength: contentText.length });
+        // Text is already sanitized and formatted in documentParser.js
+        // No need to sanitize again - this would destroy formatting!
+        Utils.debug.log('Using pre-formatted text', { finalLength: contentText.length });
 
         // Split text into lines that fit on page
         const lines = this.splitTextIntoLines(doc, contentText, contentWidth);
@@ -196,17 +196,18 @@ const PDFOptimizer = {
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
-            
-            // Skip empty lines but still move cursor
+
+            // Handle empty lines - add spacing but don't render text
             if (!line || line.trim().length === 0) {
-                currentY += lineHeight;
+                // Use half line height for blank lines to create proper paragraph spacing
+                currentY += lineHeight * 0.8;
                 continue;
             }
 
             // Check if we need a new page
             if (currentY + options.fontSize > marginY + contentHeight) {
                 Utils.debug.log('Adding new page', { currentPage: currentPage, linesOnPage: linesOnPage });
-                
+
                 // NEW: Add images to page before moving to next
                 if (options.includeImages && images.length > 0 && imageIndex < images.length) {
                     await this.insertImagesOnPage(doc, images, imageIndex, imagesPerPage, {
@@ -214,7 +215,7 @@ const PDFOptimizer = {
                     }, options);
                     imageIndex += imagesPerPage;
                 }
-                
+
                 doc.addPage();
                 currentPage++;
                 currentY = marginY;
@@ -225,12 +226,12 @@ const PDFOptimizer = {
             try {
                 doc.text(line, marginX, currentY);
                 linesOnPage++;
-                
+
                 // Debug every 50 lines
                 if (i % 50 === 0) {
-                    Utils.debug.log(`Rendered ${i + 1}/${lines.length} lines`, { 
+                    Utils.debug.log(`Rendered ${i + 1}/${lines.length} lines`, {
                         currentPage: currentPage,
-                        currentY: currentY 
+                        currentY: currentY
                     });
                 }
             } catch (error) {
@@ -479,6 +480,7 @@ const PDFOptimizer = {
 
     /**
      * Wrap text to lines with proper word boundaries
+     * IMPROVED: Preserves both single and double line breaks
      */
     wrapTextToLines: function(pdf, text, maxWidth, fontSize) {
         Utils.debug.log('Wrapping text to lines', {
@@ -486,43 +488,59 @@ const PDFOptimizer = {
             maxWidth: maxWidth
         });
 
-        // Split into paragraphs first
-        const paragraphs = text.split(/\n\n+/);
+        // First split by double newlines (paragraph breaks)
+        const paragraphs = text.split(/\n\n/);
         const allLines = [];
 
-        for (const paragraph of paragraphs) {
+        for (let p = 0; p < paragraphs.length; p++) {
+            const paragraph = paragraphs[p];
+
             if (!paragraph.trim()) {
                 allLines.push('');
                 continue;
             }
 
-            // Split paragraph into words
-            const words = paragraph.trim().split(/\s+/);
-            let currentLine = '';
+            // Within each paragraph, split by single newlines (line breaks)
+            const lines = paragraph.split(/\n/);
 
-            for (const word of words) {
-                const testLine = currentLine ? `${currentLine} ${word}` : word;
-                const lineWidth = pdf.getTextWidth(testLine);
+            for (const line of lines) {
+                if (!line.trim()) {
+                    allLines.push('');
+                    continue;
+                }
 
-                if (lineWidth <= maxWidth) {
-                    currentLine = testLine;
-                } else {
-                    if (currentLine) {
-                        allLines.push(currentLine);
-                        currentLine = word;
+                // Split line into words and wrap if needed
+                const words = line.trim().split(/\s+/);
+                let currentLine = '';
+
+                for (const word of words) {
+                    const testLine = currentLine ? `${currentLine} ${word}` : word;
+                    const lineWidth = pdf.getTextWidth(testLine);
+
+                    if (lineWidth <= maxWidth) {
+                        currentLine = testLine;
                     } else {
-                        // Single word is too long
-                        const brokenWords = this.breakLongWord(pdf, word, maxWidth);
-                        allLines.push(...brokenWords.slice(0, -1));
-                        currentLine = brokenWords[brokenWords.length - 1];
+                        if (currentLine) {
+                            allLines.push(currentLine);
+                            currentLine = word;
+                        } else {
+                            // Single word is too long
+                            const brokenWords = this.breakLongWord(pdf, word, maxWidth);
+                            allLines.push(...brokenWords.slice(0, -1));
+                            currentLine = brokenWords[brokenWords.length - 1];
+                        }
                     }
+                }
+
+                if (currentLine) {
+                    allLines.push(currentLine);
                 }
             }
 
-            if (currentLine) {
-                allLines.push(currentLine);
+            // Add blank line between paragraphs (but not after the last one)
+            if (p < paragraphs.length - 1) {
+                allLines.push('');
             }
-            allLines.push('');
         }
 
         return allLines;

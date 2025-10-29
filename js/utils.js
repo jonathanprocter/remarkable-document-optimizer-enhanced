@@ -151,14 +151,17 @@ const Utils = {
     },
 
     /**
-     * Sanitize text for PDF generation
+     * Sanitize text for PDF generation - MINIMAL changes to preserve formatting
      */
     sanitizeText: function(text) {
         if (!text) return '';
         return text
             .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F-\u009F]/g, '') // Remove control characters EXCEPT \n (\u000A) and \r (\u000D)
-            .replace(/[^\S\n]+/g, ' ') // Normalize spaces and tabs, but PRESERVE newlines
-            .replace(/\n{3,}/g, '\n\n') // Limit consecutive newlines to 2
+            .replace(/\t/g, '    ') // Convert tabs to 4 spaces
+            .replace(/\r\n/g, '\n') // Normalize Windows line endings
+            .replace(/\r/g, '\n') // Normalize old Mac line endings
+            .replace(/\n{4,}/g, '\n\n\n') // Limit consecutive newlines to 3 (preserve paragraph breaks)
+            .replace(/[ \t]{2,}/g, ' ') // Only collapse 2+ consecutive spaces/tabs to 1 (preserve intentional spacing)
             .trim();
     },
 
