@@ -201,8 +201,8 @@ const PDFOptimizer = {
         let currentY = marginY;
         let currentPage = 1;
         let linesOnPage = 0;
-        const lineHeight = options.fontSize * 1.4; // IMPROVED: Even better spacing for e-ink
-        const paragraphSpacing = options.fontSize * 0.6; // Extra space between paragraphs
+        const lineHeight = options.fontSize * 1.4; // IMPROVED: Better spacing for e-ink
+        const paragraphSpacing = lineHeight * 0.5; // Extra space between paragraphs (half a line)
 
         Utils.debug.log('Starting text rendering', {
             startY: currentY,
@@ -219,26 +219,32 @@ const PDFOptimizer = {
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
 
-            // Handle empty lines (paragraph breaks)
+            // Handle empty lines (paragraph breaks) - but don't add extra space at page top
             if (!line || line.trim().length === 0) {
-                currentY += paragraphSpacing; // IMPROVED: Better paragraph spacing
+                if (currentY > marginY) { // Only add space if not at top of page
+                    currentY += paragraphSpacing;
+                }
                 continue;
             }
 
-            // IMPROVED: Widow/orphan control - avoid single lines at page breaks
+            // IMPROVED: Smart page break handling for headings and lists
             const isHeading = this.isHeadingLine(line);
             const isListItem = this.isListItem(line);
-            const nextLine = i + 1 < lines.length ? lines[i + 1] : null;
-            const linesUntilPageEnd = Math.floor((marginY + contentHeight - currentY) / lineHeight);
 
-            // Prevent orphans: Don't leave single line at bottom if next line exists
-            const wouldCreateOrphan = linesUntilPageEnd === 1 && nextLine && nextLine.trim();
+            // Check if we need a new page (basic check first)
+            const needsPageBreak = currentY + lineHeight > marginY + contentHeight;
 
-            // Prevent breaking headings/lists at page boundary
-            const shouldKeepTogether = (isHeading || isListItem) && linesUntilPageEnd < 2;
+            // Additional check: if this is a heading/list, ensure we have room for it + next line
+            let shouldKeepTogether = false;
+            if ((isHeading || isListItem) && !needsPageBreak) {
+                const nextLine = i + 1 < lines.length ? lines[i + 1] : null;
+                if (nextLine && nextLine.trim()) {
+                    const roomForBothLines = currentY + (lineHeight * 2) <= marginY + contentHeight;
+                    shouldKeepTogether = !roomForBothLines;
+                }
+            }
 
-            // Check if we need a new page
-            if (currentY + options.fontSize > marginY + contentHeight || wouldCreateOrphan || shouldKeepTogether) {
+            if (needsPageBreak || shouldKeepTogether) {
                 Utils.debug.log('Adding new page', { currentPage: currentPage, linesOnPage: linesOnPage });
                 
                 // NEW: Add images to page before moving to next
@@ -520,10 +526,6 @@ const PDFOptimizer = {
             maxWidth: maxWidth
         });
 
-        // IMPROVED: Handle hyphenated words broken across lines
-        // Join words that end with hyphen and continue on next line
-        text = this.rejoinHyphenatedWords(text);
-
         // CRITICAL FIX: Preserve ALL line breaks from original document
         // Split by single newlines first to preserve original line structure
         const originalLines = text.split('\n');
@@ -583,34 +585,28 @@ const PDFOptimizer = {
     },
 
     /**
-     * Rejoin hyphenated words that were broken across lines
-     * Example: "wonder-\nful" becomes "wonderful"
-     */
-    rejoinHyphenatedWords: function(text) {
-        // Pattern: word ending with hyphen + newline + word continuing
-        // Be careful not to join compound words (e.g., "well-known")
-        return text.replace(/([a-z])-\n([a-z])/gi, '$1$2');
-    },
-
-    /**
-     * Check if line is a heading (ALL CAPS or starts with # or numbered section)
+     * Check if line is a heading (more conservative detection)
      */
     isHeadingLine: function(line) {
         if (!line || !line.trim()) return false;
         const trimmed = line.trim();
 
-        // Check for ALL CAPS (at least 3 chars, most chars uppercase)
-        const hasAllCaps = trimmed.length >= 3 &&
-                          trimmed.replace(/[^A-Za-z]/g, '').length > 0 &&
-                          trimmed === trimmed.toUpperCase();
+        // Only treat as heading if it's short (< 80 chars) and matches patterns
+        if (trimmed.length > 80) return false;
 
         // Check for markdown heading
-        const hasMarkdownHeading = /^#{1,6}\s/.test(trimmed);
+        if (/^#{1,6}\s/.test(trimmed)) return true;
 
         // Check for numbered section (e.g., "1. Introduction", "Chapter 1")
-        const hasNumberedSection = /^(?:Chapter|\d+\.|\d+\))\s+[A-Z]/.test(trimmed);
+        if (/^(?:Chapter\s+\d+|Section\s+\d+|\d+\.\s+[A-Z])/.test(trimmed)) return true;
 
-        return hasAllCaps || hasMarkdownHeading || hasNumberedSection;
+        // Check for ALL CAPS headers (must have at least 5 alpha chars and be mostly uppercase)
+        const alphaChars = trimmed.replace(/[^A-Za-z]/g, '');
+        if (alphaChars.length >= 5 && alphaChars === alphaChars.toUpperCase()) {
+            return true;
+        }
+
+        return false;
     },
 
     /**
