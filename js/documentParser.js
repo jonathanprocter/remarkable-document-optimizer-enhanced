@@ -136,23 +136,26 @@ const DocumentParser = {
             const x = transform[4];
             const y = transform[5];
 
-            // Check for new line - improved detection
+            // FIXED: Line break detection with correct priority
             if (lastY !== null) {
                 const verticalGap = Math.abs(y - lastY);
-                const lineHeightThreshold = (lastHeight || 5) * 0.3;
-                
-                // Add line break if vertical position changed significantly
-                if (verticalGap > lineHeightThreshold) {
-                    if (text && !text.endsWith('\n')) {
-                        text += '\n';
-                    }
-                }
-                // Also detect paragraph breaks (larger vertical gaps)
-                else if (verticalGap > (lastHeight || 5) * 1.5) {
+                const lineHeight = lastHeight || 10;
+
+                // Check for paragraph breaks FIRST (larger gaps)
+                if (verticalGap > lineHeight * 1.5) {
+                    // Large gap = paragraph break
                     if (text && !text.endsWith('\n\n')) {
                         text += '\n\n';
                     }
                 }
+                // Then check for regular line breaks (medium gaps)
+                else if (verticalGap > lineHeight * 0.5) {
+                    // Medium gap = line break
+                    if (text && !text.endsWith('\n')) {
+                        text += '\n';
+                    }
+                }
+                // Small or no gap = same line, continue
             }
             
             // Add spacing if needed (not at line start)
@@ -221,52 +224,23 @@ const DocumentParser = {
     },
 
     /**
-     * Fix broken words caused by Type 3 fonts and ligature splitting
-     * This is a more aggressive approach that merges single letters separated by spaces
+     * DISABLED: Fix broken words (too aggressive, destroys normal text)
+     * Only keep the most conservative ligature fixes
      */
     fixBrokenWords(text) {
-        // Strategy: Look for patterns like "w o r d" and merge them back to "word"
-        // But be careful not to merge actual separate words
-        
-        // First pass: Fix obvious ligature splits (f i, f f, etc.)
-        text = text.replace(/\bf\s+i\b/gi, 'fi');
-        text = text.replace(/\bf\s+f\b/gi, 'ff');
-        text = text.replace(/\bf\s+l\b/gi, 'fl');
-        text = text.replace(/\bf\s+f\s+i\b/gi, 'ffi');
-        text = text.replace(/\bf\s+f\s+l\b/gi, 'ffl');
-        
-        // Second pass: More aggressive - look for single letters with spaces in between
-        // Pattern: letter space letter (where both are lowercase or both match case)
-        // This catches patterns like "di ff erent" -> "different"
-        
-        // Split into lines to process line by line
-        const lines = text.split('\n');
-        const fixedLines = lines.map(line => {
-            // Look for sequences of single letters separated by single spaces
-            // Pattern: lowercase letter, space, lowercase letter
-            let fixed = line;
-            
-            // Repeatedly merge single-letter sequences until no more found
-            let iterations = 0;
-            const maxIterations = 20; // Prevent infinite loops
-            
-            while (iterations < maxIterations) {
-                const before = fixed;
-                
-                // Merge single lowercase letters separated by a single space
-                // But only if they're part of a larger sequence
-                fixed = fixed.replace(/\b([a-z])\s+([a-z])\s+([a-z])/g, '$1$2 $3');
-                fixed = fixed.replace(/\b([a-z])\s+([a-z])\b/g, '$1$2');
-                
-                // If nothing changed, we're done
-                if (fixed === before) break;
-                iterations++;
-            }
-            
-            return fixed;
-        });
-        
-        return fixedLines.join('\n');
+        // ONLY fix obvious ligature splits that are clearly broken
+        // These are very specific patterns that rarely occur in normal text
+
+        // Fix common ligature splits: "f i" -> "fi", "f l" -> "fl"
+        // Use word boundaries and be very conservative
+        text = text.replace(/\bf\s+i\b/g, 'fi');
+        text = text.replace(/\bf\s+l\b/g, 'fl');
+        text = text.replace(/\bf\s+f\b/g, 'ff');
+
+        // DO NOT do aggressive single-letter merging - it destroys normal text
+        // like "a new" becoming "anew"
+
+        return text;
     },
 
     /**
@@ -435,190 +409,31 @@ const DocumentParser = {
     },
     
     /**
-     * Smart formatting cleanup - adds line breaks for better structure
-     * This preserves numbered lists, headings, and paragraph breaks
+     * MINIMAL cleanup - ONLY fix encoding errors, preserve ALL layout
+     *
+     * CRITICAL: This function must NOT change document structure, line breaks, or spacing
+     * It should ONLY fix character encoding corruption
      */
     smartFormatCleanup(text) {
-        Utils.debug.log('smartFormatCleanup BEFORE:', {
+        Utils.debug.log('smartFormatCleanup - minimal encoding fixes only', {
             length: text.length,
-            firstChars: text.substring(0, 200),
-            hasEncoding: text.includes('ð'),
-            hasConcatenations: text.includes('separationanxiety') || text.includes('majorattachment')
+            firstChars: text.substring(0, 100)
         });
-        
-        // Fix encoding issues - replace ðý with proper bullet (multiple patterns)
-        const beforeEncoding = text.length;
-        text = text.replace(/ðý/g, '\n• ');
-        text = text.replace(/ð ý/g, '\n• ');
-        text = text.replace(/ð\s*ý/g, '\n• ');
-        text = text.replace(/ðý/g, '\n• ');
-        text = text.replace(/ð ý/g, '\n• ');
-        Utils.debug.log('Encoding fixes applied:', { before: beforeEncoding, after: text.length });
-        
-        // TRANSCRIPT FORMATTING
-        // Fix speaker names with timestamps (e.g., "Jonathan Procter 01:02 Hi" -> "Jonathan Procter\n01:02\nHi")
-        text = text.replace(/([A-Z][a-z]+ [A-Z][a-z]+) (\d{1,2}:\d{2}) /g, '\n\n$1\n$2\n');
-        
-        // Fix timestamps embedded in text
-        text = text.replace(/(\d{2}:\d{2}) ([A-Z])/g, '$1\n$2');
-        
-        // Fix "PEAKERS" -> "SPEAKERS" (common OCR error)
-        text = text.replace(/\bPEAKERS\b/g, 'SPEAKERS');
-        
-        // Fix major encoding issues
-        text = text.replace(/è\s*UPLE/g, 'COUPLE');
-        text = text.replace(/ðNTERVENTð/g, 'INTERVENTION');
-        text = text.replace(/è/g, 'C');
-        text = text.replace(/ð/g, 'I');
-        
-        // Fix garbled text patterns
-        text = text.replace(/C[çç]muni[àá]A[óò]icSk[ïî][ãä]×s/g, 'Communication Skills');
-        text = text.replace(/[çç]muni[àá]A[óò]ic/g, 'Communication');
-        
-        // Fix missing first letters at word boundaries
-        text = text.replace(/\bonathan\b/g, 'Jonathan');
-        text = text.replace(/\nebecca\b/g, 'Rebecca');
-        text = text.replace(/\bommunication\b/g, 'Communication');
-        text = text.replace(/\bnger\b/g, 'Anger');
-        text = text.replace(/\belationship\b/g, 'Relationship');
-        text = text.replace(/\bctive\b/g, 'Active');
-        text = text.replace(/\bxercise/g, 'Exercise');
-        text = text.replace(/\bttachment\b/g, 'Attachment');
-        
-        // Fix "there'sa" and similar contractions
-        text = text.replace(/(\w+)'s([a-z])/g, "$1's $2");
-        
-        // AGGRESSIVE FIX: Remove spaces within words (e.g., "T o Psy C ho T hera P y" -> "ToPsychoTherapy")
-        // Pattern: Single letter + space + single letter (repeated)
-        // This fixes academic texts with severe character spacing issues
-        text = text.replace(/\b([A-Z]) ([a-z])\b/g, '$1$2'); // "T o" -> "To"
-        text = text.replace(/\b([a-z]) ([A-Z])\b/g, '$1$2'); // "o F" -> "oF"
-        text = text.replace(/\b([A-Z]) ([A-Z])\b/g, '$1$2'); // "T T" -> "TT"
-        text = text.replace(/\b([a-z]) ([a-z])\b/g, '$1$2'); // "e d" -> "ed"
-        
-        // Multi-pass: Remove single-letter spaces (up to 5 passes for nested patterns)
-        for (let i = 0; i < 5; i++) {
-            text = text.replace(/([a-zA-Z]) ([a-zA-Z])/g, '$1$2');
-        }
-        
-        // Fix common concatenated words (add space between lowercase and uppercase)
-        text = text.replace(/([a-z])([A-Z])/g, '$1 $2');
-        
-        // Fix page numbers at start of lines followed by text
-        text = text.replace(/(^|\n)(\d+)([A-Z][a-z])/gm, '$1$2\n$3');
-        
-        // Fix multi-digit page numbers like "414" -> "4\n14"
-        text = text.replace(/(^|\n)(\d)(\d{2,})([A-Z])/gm, '$1$2\n$3\n$4');
-        
-        // Fix words running together - add space before common prefixes/suffixes
-        text = text.replace(/([a-z])(in|ed|ing|system|anxiety|attachment)([A-Z])/g, '$1$2 $3');
-        
-        // Add spaces in obvious concatenations (EXPANDED LIST)
-        const concatenations = [
-            ['utilizedin', 'utilized in'],
-            ['includingphotocopying', 'including photocopying'],
-            ['retrievalsystem', 'retrieval system'],
-            ['separationanxiety', 'separation anxiety'],
-            ['majorattachment', 'major attachment'],
-            ['experiencingan', 'experiencing an'],
-            ['separationfrom', 'separation from'],
-            ['fromhome', 'from home'],
-            ['aboutbeing', 'about being'],
-            ['aboutlosing', 'about losing'],
-            ['orin', 'or in'],
-            ['topreoccupation', 'to preoccupation'],
-            ['aboutseparation', 'about separation'],
-            ['scenariosabout', 'scenarios about'],
-            ['tovomiting', 'to vomiting'],
-            ['frommajor', 'from major'],
-            ['nextt', 'next t'],
-            ['nextto', 'next to'],
-            ['belisted', 'be listed'],
-            ['beingseparated', 'being separated'],
-            ['leaveor', 'leave or'],
-            ['lonelywhen', 'lonely when'],
-            ['stayingasleep', 'staying asleep'],
-            ['tantrumswhen', 'tantrums when'],
-            ['thehouse', 'the house'],
-            ['otherforms', 'other forms'],
-            ['theloved', 'the loved'],
-            ['uncontactable', 'uncontactable'],
-            ['separations', 'separations'],
-            ['tolet', 'to let'],
-            ['toany', 'to any'],
-            ['orsafety', 'or safety'],
-            ['whereabouts', 'whereabouts'],
-            ['inanticipation', 'in anticipation'],
-            ['provokingsituations', 'provoking situations'],
-            ['orexperiencing', 'or experiencing'],
-            ['aboutbeingseparated', 'about being separated'],
-            ['beingseparated', 'being separated'],
-            ['lonelywhen', 'lonely when'],
-            ['topreoccupation', 'to preoccupation'],
-            ['aboutseparation', 'about separation'],
-            ['scenariosabout', 'scenarios about'],
-            ['thehouse', 'the house'],
-            ['apartðý', 'apart'],
-            ['oneðý', 'one'],
-            ['aloneðý', 'alone'],
-            ['uncontactableðý', 'uncontactable'],
-            ['separationsðý', 'separations'],
-            ['controlðý', 'control']
-        ];
-        
-        for (const [wrong, right] of concatenations) {
-            text = text.replace(new RegExp(wrong, 'gi'), right);
-        }
-        
-        // Add line breaks after question marks before numbers
-        text = text.replace(/\?(\d+\.)/g, '?\n$1');
-        
-        // Add line breaks in number sequences like "1-2-3-4-5"
-        text = text.replace(/(\d)-(\d)-(\d)-(\d)-(\d)/g, '$1\n$2\n$3\n$4\n$5');
-        text = text.replace(/(\d)-(\d)-(\d)-(\d)/g, '$1\n$2\n$3\n$4');
-        text = text.replace(/(\d)-(\d)-(\d)/g, '$1\n$2\n$3');
-        
-        // Fix table of contents - add line breaks before page numbers at start
-        text = text.replace(/^(\d+)(\d+)(\d+)/m, '$1\n$2\n$3\n');
-        
-        // Add line breaks before numbered items (1., 2., 3. or 1), 2), 3))
-        text = text.replace(/(\S)(\d+[\.\)])\s+/g, '$1\n$2 ');
-        
-        // Add line breaks before bullet points and checkboxes
-        text = text.replace(/(\S)([•\-\*○▪☐☑])\s*/g, '$1\n$2 ');
-        
-        // Add line breaks before common question patterns
-        text = text.replace(/(\S)(Question\s+\d+)/gi, '$1\n\n$2');
-        text = text.replace(/(\S)(Q\d+[\.:])/g, '$1\n\n$2');
-        
-        // Detect and add spacing around ALL CAPS headings (at least 3 chars, max 80 chars)
-        text = text.replace(/(\S)([A-Z][A-Z\s]{2,78}[A-Z])(?=[a-z]|\d)/g, '$1\n\n$2\n\n');
-        
-        // Add line breaks before common section headers
-        text = text.replace(/(\S)(Contents|Introduction|Summary|Conclusion|References|Appendix|Self-Assessment|Symptoms|Triggers|Management|Checklist|Inventory|History|Strategies|Practices|Plan|Boundaries|Skills|Styles|Wellness):/gi, '$1\n\n$2:\n');
-        
-        // Fix section headers followed by numbers
-        text = text.replace(/(Checklist|Inventory|History)(\d)/gi, '$1\n$2');
-        
-        // Add line breaks before "Statement Rate" pattern
-        text = text.replace(/(\S)(Statement\s+Rate)/gi, '$1\n\n$2');
-        
-        // Add line breaks before score patterns
-        text = text.replace(/(\S)(Score:)/gi, '$1\n\n$2');
-        
-        // Add line breaks before "Emotional Symptoms" and similar
-        text = text.replace(/(\.)([A-Z][a-z]+\s+Symptoms)/g, '$1\n\n$2');
-        
-        // Clean up excessive line breaks (max 2)
-        text = text.replace(/\n{3,}/g, '\n\n');
-        
-        Utils.debug.log('smartFormatCleanup AFTER:', {
-            length: text.length,
-            firstChars: text.substring(0, 200),
-            hasEncoding: text.includes('ð'),
-            hasConcatenations: text.includes('separationanxiety') || text.includes('majorattachment')
+
+        // ONLY fix obvious encoding corruption - DO NOT change layout
+        // These are character-level fixes that don't affect structure
+
+        // Fix common encoding errors that are clearly corruption
+        text = text.replace(/\bPEAKERS\b/g, 'SPEAKERS'); // Common OCR error
+
+        // Clean up excessive blank lines (more than 2 in a row)
+        // This is the ONLY structural change - collapse 3+ blank lines to 2
+        text = text.replace(/\n{4,}/g, '\n\n\n');
+
+        Utils.debug.log('smartFormatCleanup complete - layout preserved', {
+            length: text.length
         });
-        
+
         return text;
     }
 };
