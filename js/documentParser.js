@@ -439,9 +439,12 @@ const DocumentParser = {
      * This preserves numbered lists, headings, and paragraph breaks
      */
     smartFormatCleanup(text) {
-        // Fix encoding issues - replace ðý with proper bullet
-        text = text.replace(/ðý/g, '• ');
-        text = text.replace(/ð ý/g, '• ');
+        // Fix encoding issues - replace ðý with proper bullet (multiple patterns)
+        text = text.replace(/ðý/g, '\n• ');
+        text = text.replace(/ð ý/g, '\n• ');
+        text = text.replace(/ð\s*ý/g, '\n• ');
+        text = text.replace(/ðý/g, '\n• ');
+        text = text.replace(/ð ý/g, '\n• ');
         
         // Fix common concatenated words (add space between lowercase and uppercase)
         text = text.replace(/([a-z])([A-Z])/g, '$1 $2');
@@ -449,10 +452,13 @@ const DocumentParser = {
         // Fix page numbers at start of lines followed by text
         text = text.replace(/(^|\n)(\d+)([A-Z][a-z])/gm, '$1$2\n$3');
         
+        // Fix multi-digit page numbers like "414" -> "4\n14"
+        text = text.replace(/(^|\n)(\d)(\d{2,})([A-Z])/gm, '$1$2\n$3\n$4');
+        
         // Fix words running together - add space before common prefixes/suffixes
         text = text.replace(/([a-z])(in|ed|ing|system|anxiety|attachment)([A-Z])/g, '$1$2 $3');
         
-        // Add spaces in obvious concatenations
+        // Add spaces in obvious concatenations (EXPANDED LIST)
         const concatenations = [
             ['utilizedin', 'utilized in'],
             ['includingphotocopying', 'including photocopying'],
@@ -471,11 +477,38 @@ const DocumentParser = {
             ['tovomiting', 'to vomiting'],
             ['frommajor', 'from major'],
             ['nextt', 'next t'],
+            ['nextto', 'next to'],
             ['belisted', 'be listed'],
             ['beingseparated', 'being separated'],
             ['leaveor', 'leave or'],
             ['lonelywhen', 'lonely when'],
-            ['topreoccupation', 'to preoccupation']
+            ['stayingasleep', 'staying asleep'],
+            ['tantrumswhen', 'tantrums when'],
+            ['thehouse', 'the house'],
+            ['otherforms', 'other forms'],
+            ['theloved', 'the loved'],
+            ['uncontactable', 'uncontactable'],
+            ['separations', 'separations'],
+            ['tolet', 'to let'],
+            ['toany', 'to any'],
+            ['orsafety', 'or safety'],
+            ['whereabouts', 'whereabouts'],
+            ['inanticipation', 'in anticipation'],
+            ['provokingsituations', 'provoking situations'],
+            ['orexperiencing', 'or experiencing'],
+            ['aboutbeingseparated', 'about being separated'],
+            ['beingseparated', 'being separated'],
+            ['lonelywhen', 'lonely when'],
+            ['topreoccupation', 'to preoccupation'],
+            ['aboutseparation', 'about separation'],
+            ['scenariosabout', 'scenarios about'],
+            ['thehouse', 'the house'],
+            ['apartðý', 'apart'],
+            ['oneðý', 'one'],
+            ['aloneðý', 'alone'],
+            ['uncontactableðý', 'uncontactable'],
+            ['separationsðý', 'separations'],
+            ['controlðý', 'control']
         ];
         
         for (const [wrong, right] of concatenations) {
