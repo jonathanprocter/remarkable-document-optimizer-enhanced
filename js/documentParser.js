@@ -63,7 +63,8 @@ const DocumentParser = {
     },
 
     /**
-     * Parse PDF document
+     * Parse PDF document - HYBRID APPROACH
+     * Tries native extraction first, falls back to OCR if quality is poor
      */
     async parsePDF(file) {
         Utils.debug.log('Parsing PDF document...');
@@ -76,19 +77,21 @@ const DocumentParser = {
 
         let fullText = '';
         const images = [];
+        let usedOCR = false;
 
-        // Extract text and images from each page
+        // STEP 1: Try native text extraction
+        Utils.debug.log('Attempting native text extraction...');
+
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
             const page = await pdf.getPage(pageNum);
-            
-            // Extract text
+
+            // Extract text using native PDF.js
             const pageText = await this.extractTextFromPage(page);
             fullText += pageText + '\n\n';
 
-            Utils.debug.log(`Page ${pageNum} extracted`, { 
+            Utils.debug.log(`Page ${pageNum} extracted`, {
                 textLength: pageText.length,
-                hasContent: !!pageText,
-                imageCount: 0
+                hasContent: !!pageText
             });
 
             // Extract images
@@ -96,177 +99,236 @@ const DocumentParser = {
             images.push(...pageImages);
         }
 
-        Utils.debug.log('Text extraction complete: ' + fullText.length + ' characters from ' + pdf.numPages + ' pages');
-        Utils.debug.log('Image extraction complete: ' + images.length + ' images found');
-        
-        // Apply smart formatting cleanup
-        fullText = this.smartFormatCleanup(fullText);
-        Utils.debug.log('Smart formatting applied');
+        Utils.debug.log('Native extraction complete: ' + fullText.length + ' characters');
 
-        Utils.debug.success('PDF parsing complete', { 
+        // STEP 2: Check text quality
+        const textQuality = this.assessTextQuality(fullText, pdf.numPages);
+        Utils.debug.log('Text quality assessment:', textQuality);
+
+        // STEP 3: Use OCR if native extraction is poor quality
+        if (textQuality.shouldUseOCR && typeof OCRManager !== 'undefined') {
+            Utils.debug.warn('Poor text quality detected, switching to OCR...');
+
+            fullText = '';
+            usedOCR = true;
+
+            // Re-process with OCR
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                const page = await pdf.getPage(pageNum);
+
+                try {
+                    const ocrText = await OCRManager.processPage(page, pageNum, pdf.numPages);
+                    fullText += ocrText + '\n\n';
+
+                    Utils.debug.success(`Page ${pageNum} OCR complete`, {
+                        textLength: ocrText.length
+                    });
+                } catch (error) {
+                    Utils.debug.error(`OCR failed for page ${pageNum}, using native extraction`, error);
+                }
+            }
+
+            OCRManager.hideProgress();
+            Utils.debug.success('OCR extraction complete: ' + fullText.length + ' characters');
+        }
+
+        // STEP 4: Clean the extracted text (minimal intervention)
+        fullText = this.cleanExtractedText(fullText);
+        Utils.debug.log('Text cleaned');
+
+        Utils.debug.success('PDF parsing complete', {
             totalPages: pdf.numPages,
             totalTextLength: fullText.trim().length,
             totalImages: images.length,
-            usedOCR: false
+            usedOCR: usedOCR,
+            quality: textQuality
         });
 
         return {
             type: 'pdf',
             content: fullText.trim(),
             images: images,
-            pageCount: pdf.numPages
+            pageCount: pdf.numPages,
+            extractionMethod: usedOCR ? 'ocr' : 'native'
         };
     },
 
     /**
-     * Extract text from a PDF page with proper spacing
+     * Extract text from a PDF page with proper spacing - NEW APPROACH
+     * Focus on accurate extraction using PDF.js positioning data
      */
     async extractTextFromPage(page) {
         const textContent = await page.getTextContent();
+        const items = textContent.items;
+
+        if (items.length === 0) return '';
+
         let text = '';
-        let lastItem = null;
-        let lastX = null;
         let lastY = null;
-        let lastHeight = null;
+        let lastX = null;
+        let lastFontSize = null;
 
-        for (const item of textContent.items) {
-            if (!item.str) continue;
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
 
-            const { transform, str, width, height } = item;
-            const x = transform[4];
-            const y = transform[5];
+            if (!item.str || !item.transform) continue;
 
-            // Check for new line - improved detection
+            const currentStr = item.str;
+            const x = item.transform[4];
+            const y = item.transform[5];
+            const fontSize = Math.abs(item.transform[3]);
+
+            // Detect new lines based on vertical position change
             if (lastY !== null) {
-                const verticalGap = Math.abs(y - lastY);
-                const lineHeightThreshold = (lastHeight || 5) * 0.3;
-                
-                // Add line break if vertical position changed significantly
-                if (verticalGap > lineHeightThreshold) {
-                    if (text && !text.endsWith('\n')) {
+                const verticalDiff = Math.abs(y - lastY);
+                const avgFontSize = (fontSize + (lastFontSize || fontSize)) / 2;
+
+                // New line if vertical position changed by more than 30% of font size
+                if (verticalDiff > avgFontSize * 0.3) {
+                    // Paragraph break for larger gaps (1.5x font size)
+                    if (verticalDiff > avgFontSize * 1.5) {
+                        text += '\n\n';
+                    } else {
                         text += '\n';
                     }
-                }
-                // Also detect paragraph breaks (larger vertical gaps)
-                else if (verticalGap > (lastHeight || 5) * 1.5) {
-                    if (text && !text.endsWith('\n\n')) {
-                        text += '\n\n';
-                    }
+                    lastX = null; // Reset horizontal tracking
                 }
             }
-            
-            // Add spacing if needed (not at line start)
-            const itemStr = item.str.trim();
-            if (itemStr) {
-                // FIXED: Much more robust space detection
-                const needsSpace = text.length > 0 && 
-                                   !text.endsWith('\n') && 
-                                   !text.endsWith(' ');
-                
-                // Check multiple conditions for space (use OR logic, not else-if):
-                if (needsSpace) {
-                    let shouldAddSpace = false;
-                    
-                    // 1. Item explicitly has leading/trailing whitespace
-                    if (item.str.startsWith(' ') || (lastItem && lastItem.str.endsWith(' '))) {
-                        shouldAddSpace = true;
-                    }
-                    // 2. Previous item has hasEOL flag (PDF.js indicator for whitespace)
-                    else if (lastItem && lastItem.hasEOL) {
-                        shouldAddSpace = true;
-                    }
-                    // 3. Check horizontal gap between items
-                    else if (lastX !== null && lastItem) {
-                        // Calculate the gap between end of last item and start of current item
-                        const gap = x - lastX;
-                        // Use a small threshold (2 pixels) to detect word boundaries
-                        if (gap > 2) {
-                            shouldAddSpace = true;
-                        }
-                    }
-                    
-                    // 4. FALLBACK: Always add space between alphanumeric characters
-                    // This is the most important fix - ensures words are always separated
-                    if (!shouldAddSpace && text.length > 0 && !text.endsWith('-')) {
-                        const lastChar = text[text.length - 1];
-                        const firstChar = itemStr[0];
-                        // Add space if transitioning between alphanumeric characters
-                        if (/[a-zA-Z0-9]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar)) {
-                            shouldAddSpace = true;
-                        }
-                        // Also add space after punctuation that typically needs it
-                        else if (/[,;:\)\]\}\.!?]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar)) {
-                            shouldAddSpace = true;
-                        }
-                    }
-                    
-                    if (shouldAddSpace) {
-                        text += ' ';
-                    }
+
+            // Add horizontal spacing based on gap between items
+            if (lastX !== null && !text.endsWith('\n') && !text.endsWith(' ')) {
+                const horizontalGap = x - lastX;
+
+                // Space if gap is larger than typical character width
+                if (horizontalGap > fontSize * 0.15) {
+                    text += ' ';
                 }
-                
-                text += itemStr;
-                lastItem = item;
             }
-            
+
+            // Add the text
+            text += currentStr;
+
+            // Update tracking variables
             lastY = y;
-            lastX = x + (item.width || 0);
-            lastHeight = height;
+            lastX = x + item.width;
+            lastFontSize = fontSize;
         }
-        
-        // FIX: Aggressively reconstruct broken words from Type 3 fonts
-        text = this.fixBrokenWords(text);
-        
+
         return text.trim();
     },
 
     /**
-     * Fix broken words caused by Type 3 fonts and ligature splitting
-     * This is a more aggressive approach that merges single letters separated by spaces
+     * Assess text quality to determine if OCR should be used
      */
-    fixBrokenWords(text) {
-        // Strategy: Look for patterns like "w o r d" and merge them back to "word"
-        // But be careful not to merge actual separate words
-        
-        // First pass: Fix obvious ligature splits (f i, f f, etc.)
-        text = text.replace(/\bf\s+i\b/gi, 'fi');
-        text = text.replace(/\bf\s+f\b/gi, 'ff');
-        text = text.replace(/\bf\s+l\b/gi, 'fl');
-        text = text.replace(/\bf\s+f\s+i\b/gi, 'ffi');
-        text = text.replace(/\bf\s+f\s+l\b/gi, 'ffl');
-        
-        // Second pass: More aggressive - look for single letters with spaces in between
-        // Pattern: letter space letter (where both are lowercase or both match case)
-        // This catches patterns like "di ff erent" -> "different"
-        
-        // Split into lines to process line by line
+    assessTextQuality(text, pageCount) {
+        const avgCharsPerPage = text.length / pageCount;
+        const words = text.split(/\s+/).filter(w => w.length > 0);
+        const avgWordLength = words.reduce((sum, w) => sum + w.length, 0) / (words.length || 1);
+
+        // Calculate suspicious patterns
+        const suspiciousChars = (text.match(/[����������]/g) || []).length;
+        const suspiciousRatio = suspiciousChars / (text.length || 1);
+
+        // Check for excessive single-character words (might indicate broken text)
+        const singleCharWords = words.filter(w => w.length === 1).length;
+        const singleCharRatio = singleCharWords / (words.length || 1);
+
+        const shouldUseOCR =
+            avgCharsPerPage < 50 ||             // Too few characters (likely scanned)
+            suspiciousRatio > 0.05 ||           // Too many encoding issues
+            singleCharRatio > 0.3 ||            // Too many single-char words
+            avgWordLength < 2;                  // Words too short (broken)
+
+        return {
+            avgCharsPerPage,
+            avgWordLength,
+            suspiciousRatio,
+            singleCharRatio,
+            shouldUseOCR,
+            quality: shouldUseOCR ? 'poor' : 'good'
+        };
+    },
+
+    /**
+     * Clean extracted text - MINIMAL intervention
+     * Only remove truly problematic characters, preserve original formatting
+     */
+    cleanExtractedText(text) {
+        if (!text) return '';
+
+        // Step 1: Remove control characters (but keep newlines and tabs)
+        text = text.replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F-\u009F]/g, '');
+
+        // Step 2: Normalize line endings only
+        text = text.replace(/\r\n/g, '\n');
+        text = text.replace(/\r/g, '\n');
+
+        // Step 3: Remove zero-width and invisible characters
+        text = text.replace(/[\u200B-\u200D\uFEFF]/g, '');
+
+        // Step 4: Preserve structure - detect and maintain formatting elements
+        text = this.preserveDocumentStructure(text);
+
+        return text.trim();
+    },
+
+    /**
+     * Preserve document structure - keep original formatting intact
+     * Detects headings, lists, and paragraphs as they appear in source
+     */
+    preserveDocumentStructure(text) {
         const lines = text.split('\n');
-        const fixedLines = lines.map(line => {
-            // Look for sequences of single letters separated by single spaces
-            // Pattern: lowercase letter, space, lowercase letter
-            let fixed = line;
-            
-            // Repeatedly merge single-letter sequences until no more found
-            let iterations = 0;
-            const maxIterations = 20; // Prevent infinite loops
-            
-            while (iterations < maxIterations) {
-                const before = fixed;
-                
-                // Merge single lowercase letters separated by a single space
-                // But only if they're part of a larger sequence
-                fixed = fixed.replace(/\b([a-z])\s+([a-z])\s+([a-z])/g, '$1$2 $3');
-                fixed = fixed.replace(/\b([a-z])\s+([a-z])\b/g, '$1$2');
-                
-                // If nothing changed, we're done
-                if (fixed === before) break;
-                iterations++;
+        const processedLines = [];
+
+        for (let i = 0; i < lines.length; i++) {
+            let line = lines[i].trimEnd();
+
+            // Preserve empty lines (paragraph breaks)
+            if (!line) {
+                processedLines.push('');
+                continue;
             }
-            
-            return fixed;
-        });
-        
-        return fixedLines.join('\n');
+
+            // Detect and preserve numbered lists (1. 2. 3. or 1) 2) 3))
+            if (/^\s*\d+[\.\)]\s+/.test(line)) {
+                // Ensure blank line before list if not already there
+                if (i > 0 && processedLines[processedLines.length - 1] !== '') {
+                    processedLines.push('');
+                }
+                processedLines.push(line.trim());
+                continue;
+            }
+
+            // Detect and preserve bullet points
+            if (/^\s*[•\-\*○▪☐☑]\s+/.test(line)) {
+                // Ensure blank line before bullet if not already there
+                if (i > 0 && processedLines[processedLines.length - 1] !== '') {
+                    processedLines.push('');
+                }
+                processedLines.push(line.trim());
+                continue;
+            }
+
+            // Detect ALL CAPS headings (likely section headers)
+            if (line.length < 100 && /^[A-Z\s]{3,}$/.test(line.trim())) {
+                // Add spacing around headings
+                if (i > 0 && processedLines[processedLines.length - 1] !== '') {
+                    processedLines.push('');
+                }
+                processedLines.push(line.trim());
+                processedLines.push('');
+                continue;
+            }
+
+            // Regular line - preserve as is
+            processedLines.push(line);
+        }
+
+        // Limit excessive blank lines but allow up to 2
+        let result = processedLines.join('\n');
+        result = result.replace(/\n{4,}/g, '\n\n\n');
+
+        return result;
     },
 
     /**
@@ -434,191 +496,4 @@ const DocumentParser = {
         };
     },
     
-    /**
-     * Smart formatting cleanup - adds line breaks for better structure
-     * This preserves numbered lists, headings, and paragraph breaks
-     */
-    smartFormatCleanup(text) {
-        Utils.debug.log('smartFormatCleanup BEFORE:', {
-            length: text.length,
-            firstChars: text.substring(0, 200),
-            hasEncoding: text.includes('ð'),
-            hasConcatenations: text.includes('separationanxiety') || text.includes('majorattachment')
-        });
-        
-        // Fix encoding issues - replace ðý with proper bullet (multiple patterns)
-        const beforeEncoding = text.length;
-        text = text.replace(/ðý/g, '\n• ');
-        text = text.replace(/ð ý/g, '\n• ');
-        text = text.replace(/ð\s*ý/g, '\n• ');
-        text = text.replace(/ðý/g, '\n• ');
-        text = text.replace(/ð ý/g, '\n• ');
-        Utils.debug.log('Encoding fixes applied:', { before: beforeEncoding, after: text.length });
-        
-        // TRANSCRIPT FORMATTING
-        // Fix speaker names with timestamps (e.g., "Jonathan Procter 01:02 Hi" -> "Jonathan Procter\n01:02\nHi")
-        text = text.replace(/([A-Z][a-z]+ [A-Z][a-z]+) (\d{1,2}:\d{2}) /g, '\n\n$1\n$2\n');
-        
-        // Fix timestamps embedded in text
-        text = text.replace(/(\d{2}:\d{2}) ([A-Z])/g, '$1\n$2');
-        
-        // Fix "PEAKERS" -> "SPEAKERS" (common OCR error)
-        text = text.replace(/\bPEAKERS\b/g, 'SPEAKERS');
-        
-        // Fix major encoding issues
-        text = text.replace(/è\s*UPLE/g, 'COUPLE');
-        text = text.replace(/ðNTERVENTð/g, 'INTERVENTION');
-        text = text.replace(/è/g, 'C');
-        text = text.replace(/ð/g, 'I');
-        
-        // Fix garbled text patterns
-        text = text.replace(/C[çç]muni[àá]A[óò]icSk[ïî][ãä]×s/g, 'Communication Skills');
-        text = text.replace(/[çç]muni[àá]A[óò]ic/g, 'Communication');
-        
-        // Fix missing first letters at word boundaries
-        text = text.replace(/\bonathan\b/g, 'Jonathan');
-        text = text.replace(/\nebecca\b/g, 'Rebecca');
-        text = text.replace(/\bommunication\b/g, 'Communication');
-        text = text.replace(/\bnger\b/g, 'Anger');
-        text = text.replace(/\belationship\b/g, 'Relationship');
-        text = text.replace(/\bctive\b/g, 'Active');
-        text = text.replace(/\bxercise/g, 'Exercise');
-        text = text.replace(/\bttachment\b/g, 'Attachment');
-        
-        // Fix "there'sa" and similar contractions
-        text = text.replace(/(\w+)'s([a-z])/g, "$1's $2");
-        
-        // AGGRESSIVE FIX: Remove spaces within words (e.g., "T o Psy C ho T hera P y" -> "ToPsychoTherapy")
-        // Pattern: Single letter + space + single letter (repeated)
-        // This fixes academic texts with severe character spacing issues
-        text = text.replace(/\b([A-Z]) ([a-z])\b/g, '$1$2'); // "T o" -> "To"
-        text = text.replace(/\b([a-z]) ([A-Z])\b/g, '$1$2'); // "o F" -> "oF"
-        text = text.replace(/\b([A-Z]) ([A-Z])\b/g, '$1$2'); // "T T" -> "TT"
-        text = text.replace(/\b([a-z]) ([a-z])\b/g, '$1$2'); // "e d" -> "ed"
-        
-        // Multi-pass: Remove single-letter spaces (up to 5 passes for nested patterns)
-        for (let i = 0; i < 5; i++) {
-            text = text.replace(/([a-zA-Z]) ([a-zA-Z])/g, '$1$2');
-        }
-        
-        // Fix common concatenated words (add space between lowercase and uppercase)
-        text = text.replace(/([a-z])([A-Z])/g, '$1 $2');
-        
-        // Fix page numbers at start of lines followed by text
-        text = text.replace(/(^|\n)(\d+)([A-Z][a-z])/gm, '$1$2\n$3');
-        
-        // Fix multi-digit page numbers like "414" -> "4\n14"
-        text = text.replace(/(^|\n)(\d)(\d{2,})([A-Z])/gm, '$1$2\n$3\n$4');
-        
-        // Fix words running together - add space before common prefixes/suffixes
-        text = text.replace(/([a-z])(in|ed|ing|system|anxiety|attachment)([A-Z])/g, '$1$2 $3');
-        
-        // Add spaces in obvious concatenations (EXPANDED LIST)
-        const concatenations = [
-            ['utilizedin', 'utilized in'],
-            ['includingphotocopying', 'including photocopying'],
-            ['retrievalsystem', 'retrieval system'],
-            ['separationanxiety', 'separation anxiety'],
-            ['majorattachment', 'major attachment'],
-            ['experiencingan', 'experiencing an'],
-            ['separationfrom', 'separation from'],
-            ['fromhome', 'from home'],
-            ['aboutbeing', 'about being'],
-            ['aboutlosing', 'about losing'],
-            ['orin', 'or in'],
-            ['topreoccupation', 'to preoccupation'],
-            ['aboutseparation', 'about separation'],
-            ['scenariosabout', 'scenarios about'],
-            ['tovomiting', 'to vomiting'],
-            ['frommajor', 'from major'],
-            ['nextt', 'next t'],
-            ['nextto', 'next to'],
-            ['belisted', 'be listed'],
-            ['beingseparated', 'being separated'],
-            ['leaveor', 'leave or'],
-            ['lonelywhen', 'lonely when'],
-            ['stayingasleep', 'staying asleep'],
-            ['tantrumswhen', 'tantrums when'],
-            ['thehouse', 'the house'],
-            ['otherforms', 'other forms'],
-            ['theloved', 'the loved'],
-            ['uncontactable', 'uncontactable'],
-            ['separations', 'separations'],
-            ['tolet', 'to let'],
-            ['toany', 'to any'],
-            ['orsafety', 'or safety'],
-            ['whereabouts', 'whereabouts'],
-            ['inanticipation', 'in anticipation'],
-            ['provokingsituations', 'provoking situations'],
-            ['orexperiencing', 'or experiencing'],
-            ['aboutbeingseparated', 'about being separated'],
-            ['beingseparated', 'being separated'],
-            ['lonelywhen', 'lonely when'],
-            ['topreoccupation', 'to preoccupation'],
-            ['aboutseparation', 'about separation'],
-            ['scenariosabout', 'scenarios about'],
-            ['thehouse', 'the house'],
-            ['apartðý', 'apart'],
-            ['oneðý', 'one'],
-            ['aloneðý', 'alone'],
-            ['uncontactableðý', 'uncontactable'],
-            ['separationsðý', 'separations'],
-            ['controlðý', 'control']
-        ];
-        
-        for (const [wrong, right] of concatenations) {
-            text = text.replace(new RegExp(wrong, 'gi'), right);
-        }
-        
-        // Add line breaks after question marks before numbers
-        text = text.replace(/\?(\d+\.)/g, '?\n$1');
-        
-        // Add line breaks in number sequences like "1-2-3-4-5"
-        text = text.replace(/(\d)-(\d)-(\d)-(\d)-(\d)/g, '$1\n$2\n$3\n$4\n$5');
-        text = text.replace(/(\d)-(\d)-(\d)-(\d)/g, '$1\n$2\n$3\n$4');
-        text = text.replace(/(\d)-(\d)-(\d)/g, '$1\n$2\n$3');
-        
-        // Fix table of contents - add line breaks before page numbers at start
-        text = text.replace(/^(\d+)(\d+)(\d+)/m, '$1\n$2\n$3\n');
-        
-        // Add line breaks before numbered items (1., 2., 3. or 1), 2), 3))
-        text = text.replace(/(\S)(\d+[\.\)])\s+/g, '$1\n$2 ');
-        
-        // Add line breaks before bullet points and checkboxes
-        text = text.replace(/(\S)([•\-\*○▪☐☑])\s*/g, '$1\n$2 ');
-        
-        // Add line breaks before common question patterns
-        text = text.replace(/(\S)(Question\s+\d+)/gi, '$1\n\n$2');
-        text = text.replace(/(\S)(Q\d+[\.:])/g, '$1\n\n$2');
-        
-        // Detect and add spacing around ALL CAPS headings (at least 3 chars, max 80 chars)
-        text = text.replace(/(\S)([A-Z][A-Z\s]{2,78}[A-Z])(?=[a-z]|\d)/g, '$1\n\n$2\n\n');
-        
-        // Add line breaks before common section headers
-        text = text.replace(/(\S)(Contents|Introduction|Summary|Conclusion|References|Appendix|Self-Assessment|Symptoms|Triggers|Management|Checklist|Inventory|History|Strategies|Practices|Plan|Boundaries|Skills|Styles|Wellness):/gi, '$1\n\n$2:\n');
-        
-        // Fix section headers followed by numbers
-        text = text.replace(/(Checklist|Inventory|History)(\d)/gi, '$1\n$2');
-        
-        // Add line breaks before "Statement Rate" pattern
-        text = text.replace(/(\S)(Statement\s+Rate)/gi, '$1\n\n$2');
-        
-        // Add line breaks before score patterns
-        text = text.replace(/(\S)(Score:)/gi, '$1\n\n$2');
-        
-        // Add line breaks before "Emotional Symptoms" and similar
-        text = text.replace(/(\.)([A-Z][a-z]+\s+Symptoms)/g, '$1\n\n$2');
-        
-        // Clean up excessive line breaks (max 2)
-        text = text.replace(/\n{3,}/g, '\n\n');
-        
-        Utils.debug.log('smartFormatCleanup AFTER:', {
-            length: text.length,
-            firstChars: text.substring(0, 200),
-            hasEncoding: text.includes('ð'),
-            hasConcatenations: text.includes('separationanxiety') || text.includes('majorattachment')
-        });
-        
-        return text;
-    }
 };
