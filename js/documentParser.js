@@ -455,6 +455,23 @@ const DocumentParser = {
         text = text.replace(/ð ý/g, '\n• ');
         Utils.debug.log('Encoding fixes applied:', { before: beforeEncoding, after: text.length });
         
+        // TRANSCRIPT FORMATTING
+        // Fix speaker names with timestamps (e.g., "Jonathan Procter 01:02 Hi" -> "Jonathan Procter\n01:02\nHi")
+        text = text.replace(/([A-Z][a-z]+ [A-Z][a-z]+) (\d{1,2}:\d{2}) /g, '\n\n$1\n$2\n');
+        
+        // Fix timestamps embedded in text
+        text = text.replace(/(\d{2}:\d{2}) ([A-Z])/g, '$1\n$2');
+        
+        // Fix "PEAKERS" -> "SPEAKERS" (common OCR error)
+        text = text.replace(/\bPEAKERS\b/g, 'SPEAKERS');
+        
+        // Fix missing first letter in names (e.g., "onathan" -> "Jonathan")
+        text = text.replace(/\bonathan\b/g, 'Jonathan');
+        text = text.replace(/\nebecca\b/g, 'Rebecca');
+        
+        // Fix "there'sa" and similar contractions
+        text = text.replace(/(\w+)'s([a-z])/g, "$1's $2");
+        
         // Fix common concatenated words (add space between lowercase and uppercase)
         text = text.replace(/([a-z])([A-Z])/g, '$1 $2');
         
