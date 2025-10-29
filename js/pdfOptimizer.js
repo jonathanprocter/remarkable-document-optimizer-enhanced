@@ -73,12 +73,13 @@ const PDFOptimizer = {
 
     /**
      * Calculate PDF dimensions based on page size
+     * IMPROVED: Better margins optimized for reMarkable Pro reading experience
      */
     calculateDimensions(pageSize, specs) {
         Utils.debug.log('Calculating dimensions for', pageSize);
-        
+
         let width, height;
-        
+
         switch (pageSize) {
             case 'remarkable':
                 width = specs.widthMM;
@@ -97,21 +98,40 @@ const PDFOptimizer = {
                 height = specs.heightMM;
         }
 
+        // IMPROVED: Asymmetric margins optimized for thumb grip and readability
+        // Left margin slightly larger for thumb space when holding device
+        const marginLeft = 15;   // Extra space for thumb
+        const marginRight = 12;  // Slightly less on right
+        const marginTop = 15;    // Comfortable top margin
+        const marginBottom = 15; // Comfortable bottom margin
+
         return {
             width: width,
             height: height,
-            marginX: 10,
-            marginY: 10,
-            contentWidth: width - 20,
-            contentHeight: height - 20
+            marginX: marginLeft,
+            marginRight: marginRight,
+            marginY: marginTop,
+            marginBottom: marginBottom,
+            contentWidth: width - marginLeft - marginRight,
+            contentHeight: height - marginTop - marginBottom
         };
     },
 
     /**
      * Apply E Ink specific optimizations
+     * IMPROVED: Better font selection for e-ink readability
      */
     applyEInkOptimizations(doc, contrast) {
         Utils.debug.log('Applying E Ink optimizations', { contrast });
+
+        // IMPROVED: Use Times font (serif) - much more readable on e-ink than Helvetica
+        // Serif fonts have better character differentiation on e-ink displays
+        try {
+            doc.setFont('times', 'normal');
+            Utils.debug.log('Font set to Times (serif) for better e-ink readability');
+        } catch (e) {
+            Utils.debug.warn('Times font not available, using default', e);
+        }
 
         // Set color based on contrast level
         const colors = {
@@ -181,12 +201,14 @@ const PDFOptimizer = {
         let currentY = marginY;
         let currentPage = 1;
         let linesOnPage = 0;
-        const lineHeight = options.fontSize * 1.2; // FIXED: Proper line spacing for readability
+        const lineHeight = options.fontSize * 1.4; // IMPROVED: Even better spacing for e-ink
+        const paragraphSpacing = options.fontSize * 0.6; // Extra space between paragraphs
 
-        Utils.debug.log('Starting text rendering', { 
-            startY: currentY, 
+        Utils.debug.log('Starting text rendering', {
+            startY: currentY,
             marginX: marginX,
-            lineCount: lines.length 
+            lineCount: lines.length,
+            lineHeight: lineHeight
         });
 
         // NEW: Track images and their positions
@@ -196,15 +218,27 @@ const PDFOptimizer = {
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
-            
-            // Skip empty lines but still move cursor
+
+            // Handle empty lines (paragraph breaks)
             if (!line || line.trim().length === 0) {
-                currentY += lineHeight;
+                currentY += paragraphSpacing; // IMPROVED: Better paragraph spacing
                 continue;
             }
 
+            // IMPROVED: Widow/orphan control - avoid single lines at page breaks
+            const isHeading = this.isHeadingLine(line);
+            const isListItem = this.isListItem(line);
+            const nextLine = i + 1 < lines.length ? lines[i + 1] : null;
+            const linesUntilPageEnd = Math.floor((marginY + contentHeight - currentY) / lineHeight);
+
+            // Prevent orphans: Don't leave single line at bottom if next line exists
+            const wouldCreateOrphan = linesUntilPageEnd === 1 && nextLine && nextLine.trim();
+
+            // Prevent breaking headings/lists at page boundary
+            const shouldKeepTogether = (isHeading || isListItem) && linesUntilPageEnd < 2;
+
             // Check if we need a new page
-            if (currentY + options.fontSize > marginY + contentHeight) {
+            if (currentY + options.fontSize > marginY + contentHeight || wouldCreateOrphan || shouldKeepTogether) {
                 Utils.debug.log('Adding new page', { currentPage: currentPage, linesOnPage: linesOnPage });
                 
                 // NEW: Add images to page before moving to next
@@ -486,6 +520,10 @@ const PDFOptimizer = {
             maxWidth: maxWidth
         });
 
+        // IMPROVED: Handle hyphenated words broken across lines
+        // Join words that end with hyphen and continue on next line
+        text = this.rejoinHyphenatedWords(text);
+
         // CRITICAL FIX: Preserve ALL line breaks from original document
         // Split by single newlines first to preserve original line structure
         const originalLines = text.split('\n');
@@ -542,6 +580,48 @@ const PDFOptimizer = {
         });
 
         return allLines;
+    },
+
+    /**
+     * Rejoin hyphenated words that were broken across lines
+     * Example: "wonder-\nful" becomes "wonderful"
+     */
+    rejoinHyphenatedWords: function(text) {
+        // Pattern: word ending with hyphen + newline + word continuing
+        // Be careful not to join compound words (e.g., "well-known")
+        return text.replace(/([a-z])-\n([a-z])/gi, '$1$2');
+    },
+
+    /**
+     * Check if line is a heading (ALL CAPS or starts with # or numbered section)
+     */
+    isHeadingLine: function(line) {
+        if (!line || !line.trim()) return false;
+        const trimmed = line.trim();
+
+        // Check for ALL CAPS (at least 3 chars, most chars uppercase)
+        const hasAllCaps = trimmed.length >= 3 &&
+                          trimmed.replace(/[^A-Za-z]/g, '').length > 0 &&
+                          trimmed === trimmed.toUpperCase();
+
+        // Check for markdown heading
+        const hasMarkdownHeading = /^#{1,6}\s/.test(trimmed);
+
+        // Check for numbered section (e.g., "1. Introduction", "Chapter 1")
+        const hasNumberedSection = /^(?:Chapter|\d+\.|\d+\))\s+[A-Z]/.test(trimmed);
+
+        return hasAllCaps || hasMarkdownHeading || hasNumberedSection;
+    },
+
+    /**
+     * Check if line is a list item
+     */
+    isListItem: function(line) {
+        if (!line || !line.trim()) return false;
+        const trimmed = line.trim();
+
+        // Check for bullet points or numbered lists
+        return /^(?:[-•*○▪☐☑]|\d+[\.\)])\s+/.test(trimmed);
     },
 
     /**
