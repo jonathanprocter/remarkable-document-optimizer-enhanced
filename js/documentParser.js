@@ -83,12 +83,11 @@ const DocumentParser = {
 
             // Extract text
             const pageText = await this.extractTextFromPage(page);
-            // FIXED: Don't auto-add breaks between pages - preserve original flow
             fullText += pageText;
 
-            // Only add separator if not last page and text doesn't already end with newline
-            if (pageNum < pdf.numPages && !pageText.endsWith('\n')) {
-                fullText += '\n';
+            // Add page separator (paragraph break between pages is natural)
+            if (pageNum < pdf.numPages) {
+                fullText += '\n\n';
             }
 
             Utils.debug.log(`Page ${pageNum} extracted`, {
@@ -165,10 +164,9 @@ const DocumentParser = {
             }
             
             // Add spacing if needed (not at line start)
-            // FIXED: Don't trim - preserve original spacing from PDF
-            const itemStr = item.str;
-            if (itemStr && itemStr.trim()) {  // Only skip if completely empty
-                // Space detection based on PDF positioning, not assumptions
+            const itemStr = item.str.trim();  // Normalize the text
+            if (itemStr) {
+                // Space detection - check PDF's intent via original item.str
                 const needsSpace = text.length > 0 &&
                                    !text.endsWith('\n') &&
                                    !text.endsWith(' ');
@@ -176,23 +174,35 @@ const DocumentParser = {
                 if (needsSpace) {
                     let shouldAddSpace = false;
 
-                    // 1. Item explicitly has leading whitespace
-                    if (itemStr.startsWith(' ')) {
+                    // 1. PDF explicitly has leading/trailing spaces
+                    if (item.str.startsWith(' ') || (lastItem && lastItem.str.endsWith(' '))) {
                         shouldAddSpace = true;
                     }
-                    // 2. Previous item explicitly has trailing whitespace
-                    else if (lastItem && lastItem.str.endsWith(' ')) {
-                        shouldAddSpace = true;
-                    }
-                    // 3. Previous item has hasEOL flag (PDF.js indicator)
+                    // 2. Previous item has hasEOL flag (PDF.js indicator)
                     else if (lastItem && lastItem.hasEOL) {
                         shouldAddSpace = true;
                     }
-                    // 4. Check horizontal gap between items (only if significant)
+                    // 3. Check horizontal gap between items
                     else if (lastX !== null && lastItem) {
                         const gap = x - lastX;
-                        // Conservative threshold - only if gap is clearly a word boundary
-                        if (gap > 3) {
+                        // Use 2px threshold (most PDFs use 2-4px for word spacing)
+                        if (gap > 2) {
+                            shouldAddSpace = true;
+                        }
+                    }
+
+                    // 4. CRITICAL FALLBACK: Ensure words don't concatenate
+                    // This catches cases where PDF doesn't encode spacing properly
+                    if (!shouldAddSpace && text.length > 0) {
+                        const lastChar = text[text.length - 1];
+                        const firstChar = itemStr[0];
+
+                        // Add space between separate words
+                        if (/[a-zA-Z0-9]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar)) {
+                            shouldAddSpace = true;
+                        }
+                        // Add space after punctuation before letters/numbers
+                        else if (/[,;:\)\]\}\.!?]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar)) {
                             shouldAddSpace = true;
                         }
                     }
