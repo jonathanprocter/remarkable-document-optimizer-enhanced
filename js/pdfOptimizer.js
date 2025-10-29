@@ -45,10 +45,16 @@ const PDFOptimizer = {
             // Set font and optimization parameters
             const fontSize = parseInt(options.fontSize) || 12;
             const contrast = options.contrast || 'medium';
-            const optimizeImages = options.optimizeImages !== false;
+            const optimizeImages = options.optimizeImages !== false; // Default: ON (greyscale for e-ink)
             const includeImages = options.includeImages !== false;
 
-            Utils.debug.log('PDF parameters', { fontSize, contrast, optimizeImages, includeImages });
+            Utils.debug.log('PDF parameters', {
+                fontSize,
+                contrast,
+                optimizeImages,
+                includeImages,
+                note: 'Images will be converted to greyscale for e-ink display'
+            });
 
             // Apply E Ink optimizations
             this.applyEInkOptimizations(doc, contrast);
@@ -347,7 +353,8 @@ const PDFOptimizer = {
     },
 
     /**
-     * NEW: Optimize image for E Ink display
+     * Optimize image for E Ink display - IMPROVED
+     * Converts to greyscale with proper contrast for e-ink readability
      */
     async optimizeImageForEInk(imageDataUrl) {
         return new Promise((resolve, reject) => {
@@ -358,50 +365,55 @@ const PDFOptimizer = {
                     canvas.width = img.width;
                     canvas.height = img.height;
                     const ctx = canvas.getContext('2d');
-                    
+
                     // Draw original image
                     ctx.drawImage(img, 0, 0);
-                    
+
                     // Get image data
                     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                     const data = imageData.data;
-                    
-                    // Convert to grayscale and increase contrast for E Ink
+
+                    // Convert to optimized greyscale for E Ink
                     for (let i = 0; i < data.length; i += 4) {
-                        // Convert to grayscale
+                        // Convert to grayscale using luminance formula
                         const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-                        
-                        // Increase contrast - make darks darker and lights lighter
-                        const contrast = 1.5;
-                        let adjusted = ((gray / 255 - 0.5) * contrast + 0.5) * 255;
+
+                        // Apply contrast enhancement for E Ink
+                        // E Ink displays benefit from higher contrast
+                        const contrast = 1.3;
+                        const brightness = 10; // Slight brightness boost
+                        let adjusted = ((gray / 255 - 0.5) * contrast + 0.5) * 255 + brightness;
                         adjusted = Math.max(0, Math.min(255, adjusted));
-                        
-                        // Apply dithering for better E Ink display
-                        const threshold = 128;
-                        const dithered = adjusted > threshold ? 255 : 0;
-                        
-                        data[i] = dithered;
-                        data[i + 1] = dithered;
-                        data[i + 2] = dithered;
-                        // Alpha stays the same
+
+                        // Apply adjusted greyscale (not dithered - smoother for photos)
+                        // E Ink Kaleido 3 handles greyscale well
+                        data[i] = adjusted;
+                        data[i + 1] = adjusted;
+                        data[i + 2] = adjusted;
+                        // Alpha stays the same (i+3)
                     }
-                    
+
                     ctx.putImageData(imageData, 0, 0);
-                    
-                    // Convert back to data URL
+
+                    // Convert back to data URL (PNG for quality)
                     const optimizedDataUrl = canvas.toDataURL('image/png');
-                    
+
                     // Clean up
                     canvas.width = 0;
                     canvas.height = 0;
-                    
+
+                    Utils.debug.log('Image optimized for E Ink', {
+                        originalSize: `${img.width}x${img.height}`,
+                        optimized: 'greyscale with enhanced contrast'
+                    });
+
                     resolve(optimizedDataUrl);
                 };
-                
+
                 img.onerror = () => {
                     reject(new Error('Failed to load image for optimization'));
                 };
-                
+
                 img.src = imageDataUrl;
             } catch (error) {
                 reject(error);
