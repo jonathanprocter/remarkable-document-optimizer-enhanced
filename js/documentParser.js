@@ -292,13 +292,28 @@ const DocumentParser = {
         ).length;
         const mixedRatio = mixedAlphaNum / (words.length || 1);
 
+        // NEW: Check for common misspelling patterns (Type 3 font issues)
+        const commonMisspellings = [
+            /\b(anxioty|therapoy|overcamo|overgrown|tiantrote|boling)\b/gi,  // Common Type 3 errors
+            /\b[a-z]{2,}[0-9]+[a-z]*\b/gi,  // Letters with numbers mixed in (e.g., "wa3rd", "h3llo")
+            /\b[BCDFGHJKLMNPQRSTVWXYZ]{5,}\b/g,  // 5+ consonants in a row (no vowels)
+        ];
+
+        let misspelledWords = 0;
+        for (const pattern of commonMisspellings) {
+            const matches = text.match(pattern);
+            if (matches) misspelledWords += matches.length;
+        }
+        const misspellingRatio = misspelledWords / (words.length || 1);
+
         const shouldUseOCR =
             avgCharsPerPage < 50 ||             // Too few characters (likely scanned)
-            suspiciousRatio > 0.02 ||           // LOWERED: Even 2% corruption is bad (was 5%)
+            suspiciousRatio > 0.02 ||           // Even 2% corruption is bad
             singleCharRatio > 0.3 ||            // Too many single-char words
             avgWordLength < 2 ||                // Words too short (broken)
-            garbledRatio > 0.05 ||              // NEW: 5% garbled words
-            mixedRatio > 0.03;                  // NEW: 3% words with mixed alpha-numeric
+            garbledRatio > 0.05 ||              // 5% garbled words
+            mixedRatio > 0.03 ||                // 3% words with mixed alpha-numeric
+            misspellingRatio > 0.01;            // NEW: Even 1% known misspellings triggers OCR
 
         return {
             avgCharsPerPage,
@@ -307,22 +322,24 @@ const DocumentParser = {
             singleCharRatio,
             garbledRatio,
             mixedRatio,
+            misspellingRatio,
             shouldUseOCR,
             quality: shouldUseOCR ? 'poor' : 'good',
-            reason: shouldUseOCR ? this.getQualityReason(avgCharsPerPage, suspiciousRatio, singleCharRatio, garbledRatio, mixedRatio, avgWordLength) : null
+            reason: shouldUseOCR ? this.getQualityReason(avgCharsPerPage, suspiciousRatio, singleCharRatio, garbledRatio, mixedRatio, misspellingRatio, avgWordLength) : null
         };
     },
 
     /**
      * Get human-readable reason for poor quality
      */
-    getQualityReason(avgChars, suspicious, singleChar, garbled, mixed, avgWord) {
+    getQualityReason(avgChars, suspicious, singleChar, garbled, mixed, misspelling, avgWord) {
         const reasons = [];
         if (avgChars < 50) reasons.push('too few characters per page');
         if (suspicious > 0.02) reasons.push(`${(suspicious * 100).toFixed(1)}% corrupted characters`);
         if (singleChar > 0.3) reasons.push('too many single-letter words');
         if (garbled > 0.05) reasons.push(`${(garbled * 100).toFixed(1)}% garbled words`);
         if (mixed > 0.03) reasons.push('mixed alphanumeric corruption');
+        if (misspelling > 0.01) reasons.push(`${(misspelling * 100).toFixed(1)}% Type 3 font misspellings detected`);
         if (avgWord < 2) reasons.push('words too short');
         return reasons.join(', ');
     },
